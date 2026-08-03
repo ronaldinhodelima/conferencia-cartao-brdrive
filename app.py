@@ -48,10 +48,13 @@ CATEGORIA_PT = {
     "Telecommunications": "Telecomunicações",
     "Tickets": "Ingressos",
     "Vehicle maintenance": "Manutenção Veicular",
+    "Transfer - Internal": "Transferência Interna",
+    "Tax on financial operations": "IOF",
+    "Tolls and in vehicle payment": "Pedágio",
 }
 
 # categorias que não representam gasto real (usadas para excluir do resumo)
-CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees")
+CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees", "Transfer - Internal")
 
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
