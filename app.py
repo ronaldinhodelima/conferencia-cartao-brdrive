@@ -194,8 +194,8 @@ def index():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL ORDER BY categoria;")
-    categorias = [r["categoria"] for r in cur.fetchall()]
+    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
+    categorias = sorted((r["categoria"] for r in cur.fetchall()), key=lambda c: cat_pt(c).lower())
 
     where = ["to_char(data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
