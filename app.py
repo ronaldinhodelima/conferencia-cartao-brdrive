@@ -116,9 +116,10 @@ BASE_CSS = """
   th { text-align:left; background:#eef1f5; padding:10px; font-size:12px; text-transform:uppercase; color:#666; }
   td { padding:8px 10px; border-top:1px solid #eee; font-size:14px; vertical-align:middle; }
   tr.conferida { background:#f2fbf3; }
+  tbody tr { cursor:pointer; }
+  tbody tr:hover { background:#f5f8ff; }
+  tr.conferida:hover { background:#e9f7eb; }
   .valor { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  .clicavel { cursor:pointer; }
-  .clicavel:hover { background:#f5f8ff; }
   .obs-input { width:100%; padding:5px 7px; border:1px solid #ddd; border-radius:5px; font-size:13px; }
   .cat-select { padding:5px; border-radius:5px; border:1px solid #ddd; font-size:13px; max-width:180px; }
   .status { font-size:11px; color:#2e8b3d; margin-left:6px; opacity:0; transition: opacity .3s; }
@@ -129,7 +130,7 @@ BASE_CSS = """
   .err { color:#b00020; font-size:13px; }
   .summary { font-size:13px; color:#555; margin-bottom:10px; }
   .cards { display:flex; gap:14px; margin-bottom:16px; flex-wrap:wrap; }
-  .card { background:#fff; border-radius:8px; padding:14px 18px; box-shadow:0 1px 2px rgba(0,0,0,0.06); flex:1; min-width:160px; }
+  .card { background:#fff; border-radius:8px; padding:14px 18px; box-shadow:0 1px 2px rgba(0,0,0,0.06); flex:1; min-width:140px; }
   .card .label { font-size:12px; color:#888; text-transform:uppercase; }
   .card .val { font-size:22px; font-weight:600; margin-top:4px; }
   .cat-breakdown { background:#fff; border-radius:8px; padding:14px 18px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
@@ -254,14 +255,13 @@ def index():
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
         trs.append(
-            f'<tr class="{row_class}" data-id="{rid}">'
-            f'<td class="clicavel" onclick="verDetalhes(\'{rid}\')">{data_fmt}</td>'
-            f'<td class="clicavel" onclick="verDetalhes(\'{rid}\')">{r["descricao"]}</td>'
+            f'<tr class="{row_class}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
+            f'<td>{data_fmt}</td>'
+            f'<td>{r["descricao"]}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
-            f'<td class="valor clicavel" onclick="verDetalhes(\'{rid}\')">R$ {r["valor"]:,.2f}</td>'
+            f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
             f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
             f'<td style="text-align:center"><input type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><button type="button" class="ver-btn" onclick="verDetalhes(\'{rid}\')">Ver</button></td>'
             f'<td><span class="status" id="status-{rid}">salvo</span></td>'
             f'</tr>'
         )
@@ -283,7 +283,7 @@ def index():
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
-    body_rows = "".join(trs) if trs else '<tr><td colspan="8" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    body_rows = "".join(trs) if trs else '<tr><td colspan="7" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -317,9 +317,6 @@ def index():
           <div class="card"><div class="label">Gasto real do mes</div><div class="val">R$ {gasto_real:,.2f}</div></div>
           <div class="card"><div class="label">Transacoes</div><div class="val">{total}</div></div>
           <div class="card"><div class="label">Conferidas</div><div class="val">{conf} / {total}</div></div>
-        </div>
-
-        <div class="cards">
           <div class="card"><div class="label">Fechamento da fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div style="font-size:12px;color:#888;margin-top:4px">Proximo: {proximo_fechamento.strftime('%d/%m/%Y')}</div></div>
           <div class="card"><div class="label">Vencimento da fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div style="font-size:12px;color:#888;margin-top:4px">{'Proximo: ' + proximo_vencimento.strftime('%d/%m/%Y') if proximo_vencimento else ''}</div></div>
         </div>
@@ -331,7 +328,7 @@ def index():
 
         <table>
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th>Detalhes</th><th></th>
+            <th>Data</th><th>Descricao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -364,6 +361,11 @@ def index():
         }}
         function fecharModal() {{
           document.getElementById('modalBg').classList.remove('show');
+        }}
+        function linhaClick(e, id) {{
+          const tag = e.target.tagName;
+          if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
+          verDetalhes(id);
         }}
         function irPara() {{
           const mes = document.getElementById('mesInput').value;
