@@ -1,7 +1,7 @@
 import os
 import functools
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -254,7 +254,8 @@ def index():
     for r in rows:
         checked = "checked" if r["conferida"] else ""
         row_class = "conferida" if r["conferida"] else ""
-        data_fmt = r["data_transacao"].strftime("%d/%m/%Y %H:%M")
+        data_local = r["data_transacao"] - timedelta(hours=3)
+        data_fmt = data_local.strftime("%d/%m/%Y %H:%M")
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
         trs.append(
