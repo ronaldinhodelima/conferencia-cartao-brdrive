@@ -105,6 +105,23 @@ def login_required(view):
     return wrapped
 
 
+def migrate():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("Aviso: falha ao rodar migracao:", e)
+
+
+migrate()
+
+DUPLICADA_OBS_PADRAO = "Duplicada - mesma compra ja lancada em outra linha (registro repetido pelo Pluggy)"
+
+
 BASE_CSS = """
 <style>
   * { box-sizing: border-box; }
@@ -122,6 +139,9 @@ BASE_CSS = """
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:#f5f8ff; }
   tr.conferida:hover { background:#e9f7eb; }
+  tr.duplicada td { text-decoration:line-through; color:#aaa; }
+  tr.duplicada { background:#fbf7f2; }
+  tr.duplicada:hover { background:#f6ece0; }
   .valor { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .obs-input { width:100%; padding:5px 7px; border:1px solid #ddd; border-radius:5px; font-size:13px; }
   .cat-select { padding:5px; border-radius:5px; border:1px solid #ddd; font-size:13px; max-width:180px; }
@@ -208,18 +228,18 @@ def index():
         "SELECT transacao_id, data_transacao, descricao, categoria, "
         "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
         "status, tipo, numero_cartao_final, parcela_atual, parcela_total, "
-        "conferida, observacao, conferida_por, conferida_em "
+        "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada "
         "FROM cartao.transacao WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
         params,
     )
     rows = cur.fetchall()
 
-    # resumo do mes (nao filtrado por status, sempre do mes inteiro)
+    # resumo do mes (nao filtrado por status, sempre do mes inteiro; duplicadas nao contam)
     cur.execute(
         "SELECT COUNT(*) total, SUM(CASE WHEN conferida THEN 1 ELSE 0 END) conferidas, "
         "SUM(CASE WHEN categoria NOT IN %s THEN COALESCE(valor_brl, valor_original) ELSE 0 END) AS gasto_real, "
         "SUM(COALESCE(valor_brl, valor_original)) AS total_bruto "
-        "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY-MM') = %s;",
+        "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY-MM') = %s AND COALESCE(duplicada, false) = false;",
         (CATEGORIAS_NAO_GASTO, mes),
     )
     resumo = cur.fetchone()
@@ -227,7 +247,7 @@ def index():
     cur.execute(
         "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
         "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY-MM') = %s "
-        "AND categoria NOT IN %s AND categoria IS NOT NULL "
+        "AND categoria NOT IN %s AND categoria IS NOT NULL AND COALESCE(duplicada, false) = false "
         "GROUP BY categoria ORDER BY total DESC LIMIT 8;",
         (mes, CATEGORIAS_NAO_GASTO),
     )
@@ -253,19 +273,21 @@ def index():
     detalhes_js = {}
     for r in rows:
         checked = "checked" if r["conferida"] else ""
-        row_class = "conferida" if r["conferida"] else ""
+        dup_checked = "checked" if r["duplicada"] else ""
+        classes = " ".join(c for c in ["conferida" if r["conferida"] else "", "duplicada" if r["duplicada"] else ""] if c)
         data_local = r["data_transacao"] - timedelta(hours=3)
         data_fmt = data_local.strftime("%d/%m/%Y %H:%M")
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
         trs.append(
-            f'<tr class="{row_class}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
+            f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td>{data_fmt}</td>'
             f'<td>{r["descricao"]}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
             f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><input type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
+            f'<td style="text-align:center"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
+            f'<td style="text-align:center"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
             f'<td><span class="status" id="status-{rid}">salvo</span></td>'
             f'</tr>'
         )
@@ -287,7 +309,7 @@ def index():
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
-    body_rows = "".join(trs) if trs else '<tr><td colspan="7" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    body_rows = "".join(trs) if trs else '<tr><td colspan="8" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -332,7 +354,7 @@ def index():
 
         <table>
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th></th>
+            <th>Data</th><th>Descricao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -376,11 +398,13 @@ def index():
           const status = document.getElementById('statusInput').value;
           window.location = '/?mes=' + mes + '&status=' + status;
         }}
+        const DUPLICADA_OBS_PADRAO = {json.dumps(DUPLICADA_OBS_PADRAO)};
         const filaSalvar = {{}};
         function salvar(id, el) {{
           const tr = el.closest('tr');
           const payload = {{
-            conferida: tr.querySelector('input[type=checkbox]').checked,
+            conferida: tr.querySelector('.conf-check').checked,
+            duplicada: tr.querySelector('.dup-check').checked,
             observacao: tr.querySelector('.obs-input').value,
             categoria: tr.querySelector('.cat-select').value
           }};
@@ -392,12 +416,21 @@ def index():
           }})).then(r => r.json()).then(d => {{
             if (d.ok) {{
               tr.classList.toggle('conferida', payload.conferida);
+              tr.classList.toggle('duplicada', payload.duplicada);
               const s = document.getElementById('status-' + id);
               s.classList.add('show');
               setTimeout(() => s.classList.remove('show'), 1500);
             }}
           }});
           filaSalvar[id] = atual;
+        }}
+        function toggleDuplicada(id, checkbox) {{
+          const tr = checkbox.closest('tr');
+          const obsInput = tr.querySelector('.obs-input');
+          if (checkbox.checked && !obsInput.value.trim()) {{
+            obsInput.value = DUPLICADA_OBS_PADRAO;
+          }}
+          salvar(id, checkbox);
         }}
       </script>
     </body></html>
@@ -411,12 +444,13 @@ def update_transacao(transacao_id):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE cartao.transacao SET conferida = %s, observacao = %s, categoria = %s, "
+        "UPDATE cartao.transacao SET conferida = %s, duplicada = %s, observacao = %s, categoria = %s, "
         "conferida_por = CASE WHEN %s THEN %s ELSE conferida_por END, "
         "conferida_em = CASE WHEN %s THEN now() ELSE conferida_em END "
         "WHERE transacao_id = %s;",
         (
             data.get("conferida", False),
+            data.get("duplicada", False),
             data.get("observacao"),
             data.get("categoria"),
             data.get("conferida", False),
