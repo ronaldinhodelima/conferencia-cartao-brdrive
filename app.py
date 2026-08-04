@@ -509,14 +509,28 @@ def cartoes():
         acao = request.form.get("acao")
         final4 = (request.form.get("final4") or "").strip()
         prefixo = (request.form.get("prefixo") or "").strip()
+        final4_original = (request.form.get("final4_original") or "").strip()
+
         if acao == "excluir" and final4:
             cur.execute("DELETE FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
             conn.commit()
+
         elif acao == "salvar":
             if not final4.isdigit() or len(final4) != 4:
                 erro = "Os 4 ultimos digitos devem ser exatamente 4 numeros."
             elif not prefixo:
                 erro = "Informe o nome/prefixo do cartao."
+            elif final4_original and final4_original != final4:
+                # edicao trocando tambem o numero final do cartao
+                cur.execute("SELECT 1 FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
+                if cur.fetchone() and final4 != final4_original:
+                    erro = f"Ja existe um cartao cadastrado com final {final4}."
+                else:
+                    cur.execute(
+                        "UPDATE cartao.cartao_nome SET final4 = %s, prefixo = %s WHERE final4 = %s;",
+                        (final4, prefixo, final4_original),
+                    )
+                    conn.commit()
             else:
                 cur.execute(
                     "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s, %s) "
@@ -530,15 +544,24 @@ def cartoes():
     cur.close()
     conn.close()
 
+    editar_final4 = request.args.get("editar", "")
+    editando = next((c for c in cartoes_cadastrados if c["final4"] == editar_final4), None)
+    form_final4 = editando["final4"] if editando else ""
+    form_prefixo = editando["prefixo"] if editando else ""
+    titulo_form = "Editar cartao" if editando else "Novo cartao"
+
     linhas = "".join(
         f'<tr><td>{c["prefixo"]}</td><td>final {c["final4"]}</td>'
-        f'<td><form method="post" style="display:inline" onsubmit="return confirm(\'Excluir este cartao?\')">'
+        f'<td style="white-space:nowrap">'
+        f'<a href="/cartoes?editar={c["final4"]}" class="ver-btn" style="text-decoration:none;margin-right:6px">Editar</a>'
+        f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir este cartao?\')">'
         f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="final4" value="{c["final4"]}">'
         f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
         for c in cartoes_cadastrados
     ) or '<tr><td colspan="3" style="text-align:center;color:#888;padding:16px">Nenhum cartao cadastrado.</td></tr>'
 
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
+    cancelar_html = '<a href="/cartoes" style="margin-left:6px;font-size:13px">cancelar edicao</a>' if editando else ''
 
     return f"""
     <html><head><title>Gerenciar Cartoes</title>{BASE_CSS}</head>
@@ -552,16 +575,17 @@ def cartoes():
       </div>
       <div class="wrap">
         <div class="cat-breakdown">
-          <h3>Novo cartao / editar existente</h3>
+          <h3>{titulo_form}{cancelar_html}</h3>
           <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
             <input type="hidden" name="acao" value="salvar">
+            <input type="hidden" name="final4_original" value="{form_final4}">
             <div>
               <label style="font-size:13px;color:#555;display:block">Ultimos 4 digitos</label>
-              <input name="final4" maxlength="4" placeholder="Ex: 9938" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+              <input name="final4" maxlength="4" placeholder="Ex: 9938" value="{form_final4}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
             </div>
             <div>
               <label style="font-size:13px;color:#555;display:block">Nome / prefixo (ex: Andrea - digital)</label>
-              <input name="prefixo" placeholder="Ex: Andrea - digital" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+              <input name="prefixo" placeholder="Ex: Andrea - digital" value="{form_prefixo}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
             </div>
             <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
           </form>
