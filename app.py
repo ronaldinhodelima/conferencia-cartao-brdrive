@@ -563,7 +563,7 @@ def cartoes():
               <label style="font-size:13px;color:#555;display:block">Nome / prefixo (ex: Andrea - digital)</label>
               <input name="prefixo" placeholder="Ex: Andrea - digital" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
             </div>
-            <button type="submit" class="login-box button" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
           </form>
           {erro_html}
         </div>
