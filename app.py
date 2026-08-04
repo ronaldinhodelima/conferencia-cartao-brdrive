@@ -52,13 +52,16 @@ CATEGORIA_PT = {
     "Tax on financial operations": "IOF",
     "Tolls and in vehicle payment": "Pedágio",
     "Agua / Gas": "Água / Gás",
+    "Natacao": "Natação",
+    "Academia": "Academia",
+    "Viagem": "Viagem",
 }
 
 # categorias que não representam gasto real (usadas para excluir do resumo)
 CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees", "Transfer - Internal")
 
 # categorias extras disponiveis no dropdown mesmo que ainda nao tenham sido usadas em nenhuma transacao
-CATEGORIAS_EXTRA = ("BRDrive", "Agua / Gas")
+CATEGORIAS_EXTRA = ("BRDrive", "Agua / Gas", "Natacao", "Academia", "Viagem")
 
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
@@ -114,6 +117,18 @@ def migrate():
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.cartao_nome ("
+            "final4 varchar(4) PRIMARY KEY, prefixo varchar(100) NOT NULL);"
+        )
+        cur.execute(
+            "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES "
+            "('9938', 'Andrea - digital'), "
+            "('3200', 'Andrea - físico'), "
+            "('6493', 'Ronaldo - físico'), "
+            "('7638', 'Ronaldo - digital') "
+            "ON CONFLICT (final4) DO NOTHING;"
+        )
         conn.commit()
         cur.close()
         conn.close()
@@ -261,8 +276,17 @@ def index():
     cur.execute("SELECT vencimento_fatura FROM cartao.conta LIMIT 1;")
     conta_row = cur.fetchone()
 
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
+    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+
     cur.close()
     conn.close()
+
+    def nome_cartao(final4):
+        if not final4:
+            return "-"
+        prefixo = nomes_cartao.get(final4)
+        return f"{prefixo} - final {final4}" if prefixo else f"final {final4}"
 
     dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
     proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
@@ -288,6 +312,7 @@ def index():
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td>{data_fmt}</td>'
             f'<td>{r["descricao"]}</td>'
+            f'<td>{nome_cartao(r["numero_cartao_final"])}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
             f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
@@ -304,7 +329,7 @@ def index():
             "valor_original": f'{r["valor_original"]:,.2f} {r["moeda_original"] or ""}' if r["valor_original"] is not None else "-",
             "status": r["status"] or "-",
             "tipo": r["tipo"] or "-",
-            "cartao": ("final " + r["numero_cartao_final"]) if r["numero_cartao_final"] else "-",
+            "cartao": nome_cartao(r["numero_cartao_final"]),
             "parcela": f'{r["parcela_atual"]}/{r["parcela_total"]}' if r["parcela_total"] and r["parcela_total"] > 1 else "À vista",
             "conferida": "Sim" if r["conferida"] else "Não",
             "conferida_por": r["conferida_por"] or "-",
@@ -314,7 +339,7 @@ def index():
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
-    body_rows = "".join(trs) if trs else '<tr><td colspan="8" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    body_rows = "".join(trs) if trs else '<tr><td colspan="9" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -326,7 +351,10 @@ def index():
     <body>
       <div class="topbar">
         <div>Conferencia de Cartao - {session.get('user')}</div>
-        <a href="/logout">Sair</a>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/cartoes">Gerenciar cartoes</a>
+          <a href="/logout">Sair</a>
+        </div>
       </div>
       <div class="wrap">
         <div class="filters">
@@ -359,7 +387,7 @@ def index():
 
         <table>
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
+            <th>Data</th><th>Descricao</th><th>Cartao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -468,6 +496,85 @@ def update_transacao(transacao_id):
     cur.close()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/cartoes", methods=["GET", "POST"])
+@login_required
+def cartoes():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    erro = None
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        final4 = (request.form.get("final4") or "").strip()
+        prefixo = (request.form.get("prefixo") or "").strip()
+        if acao == "excluir" and final4:
+            cur.execute("DELETE FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
+            conn.commit()
+        elif acao == "salvar":
+            if not final4.isdigit() or len(final4) != 4:
+                erro = "Os 4 ultimos digitos devem ser exatamente 4 numeros."
+            elif not prefixo:
+                erro = "Informe o nome/prefixo do cartao."
+            else:
+                cur.execute(
+                    "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s, %s) "
+                    "ON CONFLICT (final4) DO UPDATE SET prefixo = EXCLUDED.prefixo;",
+                    (final4, prefixo),
+                )
+                conn.commit()
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
+    cartoes_cadastrados = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    linhas = "".join(
+        f'<tr><td>{c["prefixo"]}</td><td>final {c["final4"]}</td>'
+        f'<td><form method="post" style="display:inline" onsubmit="return confirm(\'Excluir este cartao?\')">'
+        f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="final4" value="{c["final4"]}">'
+        f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
+        for c in cartoes_cadastrados
+    ) or '<tr><td colspan="3" style="text-align:center;color:#888;padding:16px">Nenhum cartao cadastrado.</td></tr>'
+
+    erro_html = f'<p class="err">{erro}</p>' if erro else ''
+
+    return f"""
+    <html><head><title>Gerenciar Cartoes</title>{BASE_CSS}</head>
+    <body>
+      <div class="topbar">
+        <div>Gerenciar Cartoes - {session.get('user')}</div>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/">Voltar</a>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="cat-breakdown">
+          <h3>Novo cartao / editar existente</h3>
+          <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="salvar">
+            <div>
+              <label style="font-size:13px;color:#555;display:block">Ultimos 4 digitos</label>
+              <input name="final4" maxlength="4" placeholder="Ex: 9938" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+            </div>
+            <div>
+              <label style="font-size:13px;color:#555;display:block">Nome / prefixo (ex: Andrea - digital)</label>
+              <input name="prefixo" placeholder="Ex: Andrea - digital" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+            </div>
+            <button type="submit" class="login-box button" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
+          </form>
+          {erro_html}
+        </div>
+
+        <table>
+          <thead><tr><th>Nome / prefixo</th><th>Final do cartao</th><th></th></tr></thead>
+          <tbody>{linhas}</tbody>
+        </table>
+      </div>
+    </body></html>
+    """
 
 
 @app.route("/health")
