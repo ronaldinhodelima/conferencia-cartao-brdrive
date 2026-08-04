@@ -51,13 +51,14 @@ CATEGORIA_PT = {
     "Transfer - Internal": "Transferência Interna",
     "Tax on financial operations": "IOF",
     "Tolls and in vehicle payment": "Pedágio",
+    "Agua / Gas": "Água / Gás",
 }
 
 # categorias que não representam gasto real (usadas para excluir do resumo)
 CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees", "Transfer - Internal")
 
 # categorias extras disponiveis no dropdown mesmo que ainda nao tenham sido usadas em nenhuma transacao
-CATEGORIAS_EXTRA = ("BRDrive",)
+CATEGORIAS_EXTRA = ("BRDrive", "Agua / Gas")
 
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
