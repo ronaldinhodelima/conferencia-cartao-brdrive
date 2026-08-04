@@ -56,6 +56,9 @@ CATEGORIA_PT = {
 # categorias que não representam gasto real (usadas para excluir do resumo)
 CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees", "Transfer - Internal")
 
+# categorias extras disponiveis no dropdown mesmo que ainda nao tenham sido usadas em nenhuma transacao
+CATEGORIAS_EXTRA = ("BRDrive",)
+
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
 
@@ -215,7 +218,8 @@ def index():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
-    categorias = sorted((r["categoria"] for r in cur.fetchall()), key=lambda c: cat_pt(c).lower())
+    categorias_db = {r["categoria"] for r in cur.fetchall()}
+    categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
 
     where = ["to_char(data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
