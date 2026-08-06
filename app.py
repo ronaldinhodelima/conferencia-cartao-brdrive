@@ -129,16 +129,99 @@ def migrate():
             "('7638', 'Ronaldo - digital') "
             "ON CONFLICT (final4) DO NOTHING;"
         )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.grupo_custo ("
+            "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
+            "teto_mensal numeric, teto_anual numeric);"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.subgrupo_custo ("
+            "id serial PRIMARY KEY, "
+            "grupo_id integer NOT NULL REFERENCES cartao.grupo_custo(id) ON DELETE CASCADE, "
+            "nome text NOT NULL, teto_mensal numeric, teto_anual numeric, "
+            "UNIQUE(grupo_id, nome));"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.categoria_subgrupo ("
+            "categoria text PRIMARY KEY, "
+            "subgrupo_id integer REFERENCES cartao.subgrupo_custo(id) ON DELETE SET NULL);"
+        )
         conn.commit()
+
+        # seed inicial de grupos/subgrupos (so roda se a tabela grupo_custo estiver vazia)
+        cur.execute("SELECT COUNT(*) FROM cartao.grupo_custo;")
+        if cur.fetchone()[0] == 0:
+            for grupo_nome, g_teto_mensal, g_teto_anual, subgrupos in SEED_GRUPOS:
+                cur.execute(
+                    "INSERT INTO cartao.grupo_custo (nome, teto_mensal, teto_anual) VALUES (%s,%s,%s) RETURNING id;",
+                    (grupo_nome, g_teto_mensal, g_teto_anual),
+                )
+                grupo_id = cur.fetchone()[0]
+                for sub_nome, s_teto_mensal, s_teto_anual, categorias in subgrupos:
+                    cur.execute(
+                        "INSERT INTO cartao.subgrupo_custo (grupo_id, nome, teto_mensal, teto_anual) "
+                        "VALUES (%s,%s,%s,%s) RETURNING id;",
+                        (grupo_id, sub_nome, s_teto_mensal, s_teto_anual),
+                    )
+                    subgrupo_id = cur.fetchone()[0]
+                    for categoria in categorias:
+                        cur.execute(
+                            "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                            "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                            (categoria, subgrupo_id),
+                        )
+            conn.commit()
+
         cur.close()
         conn.close()
     except Exception as e:
         print("Aviso: falha ao rodar migracao:", e)
 
 
-migrate()
-
 DUPLICADA_OBS_PADRAO = "Duplicada - mesma compra ja lancada em outra linha (registro repetido pelo Pluggy)"
+
+# estrutura inicial: (grupo, teto_mensal, teto_anual, [(subgrupo, teto_mensal, teto_anual, [categorias]), ...])
+SEED_GRUPOS = [
+    ("Moradia & Utilidades", None, None, [
+        ("Casa", None, None, ["Houseware", "Agua / Gas", "Telecommunications"]),
+    ]),
+    ("Alimentação", None, None, [
+        ("Mercado", None, None, ["Groceries"]),
+        ("Restaurantes", None, None, ["Eating out"]),
+    ]),
+    ("Transporte", None, None, [
+        ("Veículo & Deslocamento", None, None, [
+            "Gas stations", "Vehicle maintenance", "Parking",
+            "Tolls and in vehicle payment", "Taxi and ride-hailing",
+        ]),
+    ]),
+    ("Saúde & Bem-estar", None, None, [
+        ("Saúde", None, None, ["Healthcare", "Hospital clinics and labs", "Dentist", "Pharmacy", "Insurance"]),
+        ("Atividades Físicas", None, None, ["Natacao", "Academia"]),
+    ]),
+    ("Lazer & Viagem", None, None, [
+        ("Lazer", None, None, ["Leisure", "Cinema, theater and concerts"]),
+        ("Viagem", None, 50000, ["Airport and airlines", "Accomodation", "Tickets", "Viagem"]),
+    ]),
+    ("Educação & Filhos", None, None, [
+        ("Educação", None, None, ["School"]),
+        ("Infantil", None, None, ["Kids and toys"]),
+    ]),
+    ("Compras & Pessoal", None, None, [
+        ("Vestuário", None, None, ["Clothing"]),
+        ("Compras Gerais", None, None, ["Shopping", "Online shopping", "Electronics", "Bookstore", "Office supplies"]),
+    ]),
+    ("Serviços & Diversos", None, None, [
+        ("Serviços", None, None, ["Services", "Digital services"]),
+        ("Doações", None, None, ["Donations"]),
+        ("Taxas Financeiras", None, None, ["Tax on financial operations"]),
+    ]),
+    ("Negócios", None, None, [
+        ("BRDrive", None, None, ["BRDrive"]),
+    ]),
+]
+
+migrate()
 
 
 BASE_CSS = """
@@ -352,6 +435,7 @@ def index():
       <div class="topbar">
         <div>Conferencia de Cartao - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
+          <a href="/dre">DRE / Centro de Custos</a>
           <a href="/cartoes">Gerenciar cartoes</a>
           <a href="/logout">Sair</a>
         </div>
@@ -596,6 +680,345 @@ def cartoes():
           <thead><tr><th>Nome / prefixo</th><th>Final do cartao</th><th></th></tr></thead>
           <tbody>{linhas}</tbody>
         </table>
+      </div>
+    </body></html>
+    """
+
+
+def _fmt_moeda(v):
+    return f"R$ {v:,.2f}"
+
+
+def _barra_html(realizado, teto):
+    if not teto or teto <= 0:
+        return ""
+    pct = min(realizado / teto * 100, 999)
+    cor = "#2e8b3d" if pct < 70 else ("#d68a00" if pct < 100 else "#c0392b")
+    largura = min(pct, 100)
+    return (
+        f'<div style="background:#eee;border-radius:4px;height:8px;margin-top:4px;overflow:hidden">'
+        f'<div style="background:{cor};width:{largura:.0f}%;height:100%"></div></div>'
+        f'<div style="font-size:11px;color:{cor};margin-top:2px">{pct:.0f}% do teto</div>'
+    )
+
+
+@app.route("/dre")
+@login_required
+def dre():
+    ano = request.args.get("ano") or str(datetime.now().year)
+    hoje = datetime.now()
+    ano_atual = str(hoje.year)
+    eh_ano_atual = ano == ano_atual
+    dia_do_ano = hoje.timetuple().tm_yday if eh_ano_atual else 365
+    mes_atual_str = hoje.strftime("%Y-%m")
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute(
+        "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
+        "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY') = %s "
+        "AND COALESCE(duplicada, false) = false AND categoria NOT IN %s AND categoria IS NOT NULL "
+        "GROUP BY categoria;",
+        (ano, CATEGORIAS_NAO_GASTO),
+    )
+    anual_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
+
+    mensal_por_cat = {}
+    if eh_ano_atual:
+        cur.execute(
+            "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
+            "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY-MM') = %s "
+            "AND COALESCE(duplicada, false) = false AND categoria NOT IN %s AND categoria IS NOT NULL "
+            "GROUP BY categoria;",
+            (mes_atual_str, CATEGORIAS_NAO_GASTO),
+        )
+        mensal_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
+
+    cur.execute(
+        "SELECT g.id AS grupo_id, g.nome AS grupo_nome, g.teto_mensal AS g_teto_mensal, g.teto_anual AS g_teto_anual, "
+        "s.id AS subgrupo_id, s.nome AS subgrupo_nome, s.teto_mensal AS s_teto_mensal, s.teto_anual AS s_teto_anual, "
+        "cs.categoria "
+        "FROM cartao.grupo_custo g "
+        "JOIN cartao.subgrupo_custo s ON s.grupo_id = g.id "
+        "LEFT JOIN cartao.categoria_subgrupo cs ON cs.subgrupo_id = s.id "
+        "ORDER BY g.nome, s.nome;"
+    )
+    linhas_map = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    grupos = {}
+    categorias_mapeadas = set()
+    for r in linhas_map:
+        g = grupos.setdefault(r["grupo_id"], {
+            "nome": r["grupo_nome"], "teto_mensal": r["g_teto_mensal"], "teto_anual": r["g_teto_anual"],
+            "subgrupos": {},
+        })
+        s = g["subgrupos"].setdefault(r["subgrupo_id"], {
+            "nome": r["subgrupo_nome"], "teto_mensal": r["s_teto_mensal"], "teto_anual": r["s_teto_anual"],
+            "categorias": [],
+        })
+        if r["categoria"]:
+            s["categorias"].append(r["categoria"])
+            categorias_mapeadas.add(r["categoria"])
+
+    nao_classificadas = sorted(set(anual_por_cat) - categorias_mapeadas)
+
+    blocos = []
+    total_geral_anual = 0.0
+    for g in sorted(grupos.values(), key=lambda x: x["nome"]):
+        g_anual = 0.0
+        g_mensal = 0.0
+        subs_html = []
+        for s in sorted(g["subgrupos"].values(), key=lambda x: x["nome"]):
+            s_anual = sum(anual_por_cat.get(c, 0.0) for c in s["categorias"])
+            s_mensal = sum(mensal_por_cat.get(c, 0.0) for c in s["categorias"])
+            g_anual += s_anual
+            g_mensal += s_mensal
+            projecao = (s_anual / dia_do_ano * 365) if eh_ano_atual and dia_do_ano else s_anual
+            alerta = ""
+            if s["teto_anual"] and projecao > float(s["teto_anual"]):
+                alerta = f'<div style="font-size:11px;color:#c0392b;margin-top:2px">⚠ projecao ({_fmt_moeda(projecao)}) estoura o teto anual</div>'
+            teto_anual_html = ""
+            if s["teto_anual"]:
+                teto_anual_html = (
+                    f'<div style="font-size:12px;color:#888">Teto anual: {_fmt_moeda(float(s["teto_anual"]))}</div>'
+                    f'{_barra_html(s_anual, float(s["teto_anual"]))}'
+                )
+            teto_mensal_html = ""
+            if s["teto_mensal"] and eh_ano_atual:
+                teto_mensal_html = (
+                    f'<div style="font-size:12px;color:#888;margin-top:6px">Teto mensal: {_fmt_moeda(float(s["teto_mensal"]))} '
+                    f'(realizado no mes: {_fmt_moeda(s_mensal)})</div>'
+                    f'{_barra_html(s_mensal, float(s["teto_mensal"]))}'
+                )
+            cats_pt = ", ".join(cat_pt(c) for c in s["categorias"]) or "sem categorias vinculadas"
+            subs_html.append(
+                f'<div style="padding:10px 0;border-top:1px solid #f2f2f2">'
+                f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
+                f'<strong style="font-size:14px">{s["nome"]}</strong>'
+                f'<span style="font-size:14px">{_fmt_moeda(s_anual)} no ano</span>'
+                f'</div>'
+                f'<div style="font-size:11px;color:#aaa;margin-top:2px">{cats_pt}</div>'
+                f'{teto_anual_html}{teto_mensal_html}{alerta}'
+                f'</div>'
+            )
+        total_geral_anual += g_anual
+        teto_grupo_html = f'{_barra_html(g_anual, float(g["teto_anual"]))}' if g["teto_anual"] else ""
+        blocos.append(
+            f'<div class="cat-breakdown">'
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
+            f'<h3 style="margin:0">{g["nome"]}</h3>'
+            f'<span style="font-size:18px;font-weight:600">{_fmt_moeda(g_anual)}</span>'
+            f'</div>{teto_grupo_html}'
+            f'{"".join(subs_html)}'
+            f'</div>'
+        )
+
+    if nao_classificadas:
+        linhas_nc = "".join(
+            f'<div class="cat-row"><span>{cat_pt(c)}</span><span>{_fmt_moeda(anual_por_cat[c])}</span></div>'
+            for c in nao_classificadas
+        )
+        blocos.append(
+            f'<div class="cat-breakdown">'
+            f'<h3>Nao classificadas</h3>'
+            f'<div style="font-size:12px;color:#888;margin-bottom:8px">Categorias sem grupo/subgrupo definido em <a href="/grupos">Gerenciar grupos</a>.</div>'
+            f'{linhas_nc}</div>'
+        )
+
+    anos_opcoes = "".join(
+        f'<option value="{a}" {"selected" if str(a)==ano else ""}>{a}</option>'
+        for a in range(hoje.year - 3, hoje.year + 1)
+    )
+
+    return f"""
+    <html><head><title>DRE / Centro de Custos</title>{BASE_CSS}</head>
+    <body>
+      <div class="topbar">
+        <div>DRE / Centro de Custos - {session.get('user')}</div>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/grupos">Gerenciar grupos</a>
+          <a href="/">Voltar</a>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="filters">
+          <div>
+            <label>Ano</label>
+            <select onchange="window.location='/dre?ano='+this.value">{anos_opcoes}</select>
+          </div>
+          <div style="margin-left:auto;font-size:14px"><strong>Total do ano: {_fmt_moeda(total_geral_anual)}</strong></div>
+        </div>
+        {"".join(blocos)}
+      </div>
+    </body></html>
+    """
+
+
+@app.route("/grupos", methods=["GET", "POST"])
+@login_required
+def grupos_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    def to_num(v):
+        v = (v or "").strip().replace(",", ".")
+        return float(v) if v else None
+
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        if acao == "criar_grupo":
+            cur.execute(
+                "INSERT INTO cartao.grupo_custo (nome, teto_mensal, teto_anual) VALUES (%s,%s,%s);",
+                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual"))),
+            )
+        elif acao == "editar_grupo":
+            cur.execute(
+                "UPDATE cartao.grupo_custo SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
+                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual")), request.form.get("grupo_id")),
+            )
+        elif acao == "excluir_grupo":
+            cur.execute("DELETE FROM cartao.grupo_custo WHERE id=%s;", (request.form.get("grupo_id"),))
+        elif acao == "criar_subgrupo":
+            cur.execute(
+                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome, teto_mensal, teto_anual) VALUES (%s,%s,%s,%s);",
+                (request.form.get("grupo_id"), request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual"))),
+            )
+        elif acao == "editar_subgrupo":
+            cur.execute(
+                "UPDATE cartao.subgrupo_custo SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
+                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual")), request.form.get("subgrupo_id")),
+            )
+        elif acao == "excluir_subgrupo":
+            cur.execute("DELETE FROM cartao.subgrupo_custo WHERE id=%s;", (request.form.get("subgrupo_id"),))
+        elif acao == "mapear_categoria":
+            subgrupo_id = request.form.get("subgrupo_id") or None
+            cur.execute(
+                "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                (request.form.get("categoria"), subgrupo_id),
+            )
+        conn.commit()
+
+    cur.execute("SELECT id, nome, teto_mensal, teto_anual FROM cartao.grupo_custo ORDER BY nome;")
+    grupos_db = cur.fetchall()
+    cur.execute("SELECT id, grupo_id, nome, teto_mensal, teto_anual FROM cartao.subgrupo_custo ORDER BY nome;")
+    subgrupos_db = cur.fetchall()
+    cur.execute("SELECT categoria, subgrupo_id FROM cartao.categoria_subgrupo;")
+    mapa_categoria = {r["categoria"]: r["subgrupo_id"] for r in cur.fetchall()}
+    cur.close()
+    conn.close()
+
+    subgrupos_por_grupo = {}
+    for s in subgrupos_db:
+        subgrupos_por_grupo.setdefault(s["grupo_id"], []).append(s)
+
+    def input_num(nome, valor):
+        v = "" if valor is None else f"{float(valor):g}"
+        return f'<input name="{nome}" value="{v}" placeholder="opcional" style="width:110px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
+
+    grupos_html = []
+    for g in grupos_db:
+        subs = subgrupos_por_grupo.get(g["id"], [])
+        subs_rows = "".join(
+            f'<tr>'
+            f'<td style="padding-left:24px">'
+            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+            f'<input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">'
+            f'<input name="nome" value="{s["nome"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
+            f'{input_num("teto_mensal", s["teto_mensal"])}{input_num("teto_anual", s["teto_anual"])}'
+            f'<button type="submit" class="ver-btn">Salvar</button>'
+            f'</form></td>'
+            f'<td><form method="post" onsubmit="return confirm(\'Excluir subgrupo?\')">'
+            f'<input type="hidden" name="acao" value="excluir_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">'
+            f'<button type="submit" class="ver-btn">Excluir</button></form></td>'
+            f'</tr>'
+            for s in subs
+        )
+        grupos_html.append(f"""
+        <div class="cat-breakdown">
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+            <input name="nome" value="{g["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
+            <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
+            <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
+            <button type="submit" class="ver-btn">Salvar grupo</button>
+          </form>
+          <form method="post" style="display:inline" onsubmit="return confirm('Excluir grupo e seus subgrupos?')">
+            <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+            <button type="submit" class="ver-btn" style="margin-top:6px">Excluir grupo</button>
+          </form>
+          <table style="margin-top:10px"><tbody>{subs_rows}</tbody></table>
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding-left:24px">
+            <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+            <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+            {input_num("teto_mensal", None)}{input_num("teto_anual", None)}
+            <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
+          </form>
+        </div>
+        """)
+
+    def opcoes_subgrupo(categoria_selecionada):
+        opts = ['<option value="">(sem grupo)</option>']
+        for g in grupos_db:
+            subs = subgrupos_por_grupo.get(g["id"], [])
+            if not subs:
+                continue
+            opts.append(f'<optgroup label="{g["nome"]}">')
+            for s in subs:
+                sel = "selected" if mapa_categoria.get(categoria_selecionada) == s["id"] else ""
+                opts.append(f'<option value="{s["id"]}" {sel}>{s["nome"]}</option>')
+            opts.append('</optgroup>')
+        return "".join(opts)
+
+    todas_categorias = sorted(
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - set(CATEGORIAS_NAO_GASTO),
+        key=lambda c: cat_pt(c).lower(),
+    )
+    categorias_rows = "".join(
+        f'<tr><td>{cat_pt(c)}</td><td>'
+        f'<form method="post" onchange="this.submit()">'
+        f'<input type="hidden" name="acao" value="mapear_categoria"><input type="hidden" name="categoria" value="{c}">'
+        f'<select name="subgrupo_id" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{opcoes_subgrupo(c)}</select>'
+        f'</form></td></tr>'
+        for c in todas_categorias
+    )
+
+    return f"""
+    <html><head><title>Gerenciar Grupos de Custo</title>{BASE_CSS}</head>
+    <body>
+      <div class="topbar">
+        <div>Gerenciar Grupos de Custo - {session.get('user')}</div>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/dre">Ver DRE</a>
+          <a href="/">Voltar</a>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <div class="cat-breakdown">
+          <h3>Novo grupo</h3>
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="criar_grupo">
+            <input name="nome" placeholder="Nome do grupo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+            <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", None)}
+            <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", None)}
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar grupo</button>
+          </form>
+        </div>
+
+        {"".join(grupos_html)}
+
+        <div class="cat-breakdown">
+          <h3>Vincular categorias aos subgrupos</h3>
+          <table>
+            <thead><tr><th>Categoria</th><th>Subgrupo</th></tr></thead>
+            <tbody>{categorias_rows}</tbody>
+          </table>
+        </div>
       </div>
     </body></html>
     """
