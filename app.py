@@ -1025,7 +1025,7 @@ def dre():
             "SELECT COALESCE(dv.nome, '(nao definido)') AS nome, "
             "SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
             "FROM cartao.transacao t "
-            "LEFT JOIN cartao.transacao_dimensao td ON td.transacao_id = t.transacao_id AND td.dimensao_id = %s "
+            "LEFT JOIN cartao.transacao_dimensao td ON td.transacao_id = t.transacao_id::text AND td.dimensao_id = %s "
             "LEFT JOIN cartao.dimensao_valor dv ON dv.id = td.valor_id "
             "WHERE to_char(t.data_transacao,'YYYY') = %s AND COALESCE(t.duplicada, false) = false "
             "AND t.categoria NOT IN %s AND t.categoria IS NOT NULL "
