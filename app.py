@@ -117,6 +117,17 @@ def migrate():
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
+        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
+            "id serial PRIMARY KEY, padrao text NOT NULL, categoria text NOT NULL, ordem integer DEFAULT 0);"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.regra_dimensao_valor ("
+            "regra_id integer NOT NULL REFERENCES cartao.regra_classificacao(id) ON DELETE CASCADE, "
+            "dimensao_id integer NOT NULL, valor_id integer NOT NULL, "
+            "PRIMARY KEY (regra_id, dimensao_id));"
+        )
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.cartao_nome ("
             "final4 varchar(4) PRIMARY KEY, prefixo varchar(100) NOT NULL);"
@@ -210,6 +221,33 @@ def migrate():
         conn.close()
     except Exception as e:
         print("Aviso: falha ao rodar migracao:", e)
+
+
+def aplicar_regras(cur):
+    """Aplica regras de classificacao automatica a lancamentos pendentes ainda nao tocados por nenhuma regra.
+    So mexe em transacoes com conferida=false, nunca sobrescreve algo que o usuario ja confirmou."""
+    try:
+        cur.execute(
+            "WITH match AS ("
+            "  SELECT DISTINCT ON (t.transacao_id) t.transacao_id, r.id AS regra_id, r.categoria "
+            "  FROM cartao.transacao t "
+            "  JOIN cartao.regra_classificacao r ON t.descricao ILIKE '%%' || r.padrao || '%%' "
+            "  WHERE t.regra_aplicada_id IS NULL AND t.conferida = false "
+            "  ORDER BY t.transacao_id, r.ordem, r.id"
+            ") "
+            "UPDATE cartao.transacao t SET categoria = m.categoria, regra_aplicada_id = m.regra_id "
+            "FROM match m WHERE t.transacao_id = m.transacao_id::uuid;"
+        )
+        cur.execute(
+            "INSERT INTO cartao.transacao_dimensao (transacao_id, dimensao_id, valor_id) "
+            "SELECT t.transacao_id::text, rdv.dimensao_id, rdv.valor_id "
+            "FROM cartao.transacao t "
+            "JOIN cartao.regra_dimensao_valor rdv ON rdv.regra_id = t.regra_aplicada_id "
+            "WHERE t.regra_aplicada_id IS NOT NULL "
+            "ON CONFLICT (transacao_id, dimensao_id) DO NOTHING;"
+        )
+    except Exception as e:
+        print("Aviso: falha ao aplicar regras:", e)
 
 
 DUPLICADA_OBS_PADRAO = "Duplicada - mesma compra ja lancada em outra linha (registro repetido pelo Pluggy)"
@@ -349,6 +387,9 @@ def index():
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    aplicar_regras(cur)
+    conn.commit()
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
@@ -515,6 +556,7 @@ def index():
         <div style="display:flex;gap:18px;align-items:center">
           <a href="/dre">DRE / Centro de Custos</a>
           <a href="/dimensoes">Gerenciar dimensoes</a>
+          <a href="/regras">Regras automaticas</a>
           <a href="/cartoes">Gerenciar cartoes</a>
           <a href="/logout">Sair</a>
         </div>
@@ -930,6 +972,7 @@ def dimensoes_view():
         <div>Gerenciar Dimensoes - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
           <a href="/dre">Ver DRE</a>
+          <a href="/regras">Regras automaticas</a>
           <a href="/">Voltar</a>
           <a href="/logout">Sair</a>
         </div>
@@ -951,6 +994,158 @@ def dimensoes_view():
           {erro_html}
         </div>
         {"".join(blocos)}
+      </div>
+    </body></html>
+    """
+
+
+@app.route("/regras", methods=["GET", "POST"])
+@login_required
+def regras_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    erro = None
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        if acao == "criar_regra":
+            padrao = (request.form.get("padrao") or "").strip()
+            categoria = request.form.get("categoria") or ""
+            if not padrao:
+                erro = "Informe o texto/padrao a procurar na descricao."
+            else:
+                cur.execute(
+                    "INSERT INTO cartao.regra_classificacao (padrao, categoria) VALUES (%s,%s) RETURNING id;",
+                    (padrao, categoria),
+                )
+                regra_id = cur.fetchone()["id"]
+                for chave, valor in request.form.items():
+                    if chave.startswith("dim_") and valor:
+                        dim_id = chave.replace("dim_", "")
+                        cur.execute(
+                            "INSERT INTO cartao.regra_dimensao_valor (regra_id, dimensao_id, valor_id) VALUES (%s,%s,%s);",
+                            (regra_id, dim_id, valor),
+                        )
+                conn.commit()
+        elif acao == "excluir_regra":
+            cur.execute("DELETE FROM cartao.regra_classificacao WHERE id=%s;", (request.form.get("regra_id"),))
+            conn.commit()
+        elif acao == "reaplicar_regra":
+            # libera as transacoes pendentes que essa regra ja tinha marcado, para reclassificar no proximo acesso
+            cur.execute(
+                "UPDATE cartao.transacao SET regra_aplicada_id = NULL "
+                "WHERE regra_aplicada_id = %s AND conferida = false;",
+                (request.form.get("regra_id"),),
+            )
+            conn.commit()
+
+    aplicar_regras(cur)
+    conn.commit()
+
+    cur.execute("SELECT id, padrao, categoria, ordem FROM cartao.regra_classificacao ORDER BY ordem, id;")
+    regras_db = cur.fetchall()
+    cur.execute("SELECT regra_id, dimensao_id, valor_id FROM cartao.regra_dimensao_valor;")
+    dim_por_regra = {}
+    for r in cur.fetchall():
+        dim_por_regra.setdefault(r["regra_id"], {})[r["dimensao_id"]] = r["valor_id"]
+
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    valores_por_dim = {}
+    for v in cur.fetchall():
+        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
+
+    cur.execute("SELECT COUNT(*) AS n FROM cartao.transacao WHERE regra_aplicada_id IS NOT NULL;")
+    total_aplicadas = cur.fetchone()["n"]
+
+    todas_categorias = sorted(
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - set(CATEGORIAS_NAO_GASTO),
+        key=lambda c: cat_pt(c).lower(),
+    )
+
+    cur.close()
+    conn.close()
+
+    def cat_options_regra():
+        return "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in todas_categorias)
+
+    def dim_options_regra(dimensao_id, selecionado=None):
+        opts = ['<option value="">(nao definir)</option>']
+        for v in valores_por_dim.get(dimensao_id, []):
+            sel = "selected" if selecionado == v["id"] else ""
+            opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
+        return "".join(opts)
+
+    dim_cols_novo = "".join(
+        f'<div><label style="font-size:12px;color:#888;display:block">{d["nome"]}</label>'
+        f'<select name="dim_{d["id"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{dim_options_regra(d["id"])}</select></div>'
+        for d in dimensoes
+    )
+
+    linhas = []
+    for r in regras_db:
+        dims_txt = []
+        for d in dimensoes:
+            vid = dim_por_regra.get(r["id"], {}).get(d["id"])
+            if vid:
+                nome_valor = next((v["nome"] for v in valores_por_dim.get(d["id"], []) if v["id"] == vid), "?")
+                dims_txt.append(f'{d["nome"]}: {nome_valor}')
+        dims_html = ", ".join(dims_txt) or "-"
+        linhas.append(
+            f'<tr><td><strong>"{r["padrao"]}"</strong></td><td>{cat_pt(r["categoria"])}</td><td>{dims_html}</td>'
+            f'<td style="white-space:nowrap">'
+            f'<form method="post" style="display:inline" onsubmit="return confirm(\'Reaplicar essa regra aos lancamentos pendentes?\')">'
+            f'<input type="hidden" name="acao" value="reaplicar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
+            f'<button type="submit" class="ver-btn">Reaplicar</button></form> '
+            f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir esta regra?\')">'
+            f'<input type="hidden" name="acao" value="excluir_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
+            f'<button type="submit" class="ver-btn">Excluir</button></form>'
+            f'</td></tr>'
+        )
+    linhas_html = "".join(linhas) or '<tr><td colspan="4" style="text-align:center;color:#888;padding:16px">Nenhuma regra cadastrada ainda.</td></tr>'
+
+    erro_html = f'<p class="err">{erro}</p>' if erro else ''
+
+    return f"""
+    <html><head><title>Regras Automaticas</title>{BASE_CSS}</head>
+    <body>
+      <div class="topbar">
+        <div>Regras Automaticas - {session.get('user')}</div>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/">Voltar</a>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <div style="font-size:13px;color:#666;margin-bottom:16px">
+          Quando a descricao de um lancamento <strong>pendente</strong> (nao conferido) contiver o texto cadastrado aqui,
+          o app preenche sozinho a categoria e as dimensoes escolhidas, na proxima vez que voce abrir a tela principal.
+          Nunca mexe em lancamentos que voce ja marcou como conferidos.
+          Total de lancamentos ja classificados por regras: <strong>{total_aplicadas}</strong>.
+        </div>
+        <div class="cat-breakdown">
+          <h3>Nova regra</h3>
+          <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="criar_regra">
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Texto na descricao</label>
+              <input name="padrao" placeholder='Ex: BOCO GAS' style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+            </div>
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Categoria</label>
+              <select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{cat_options_regra()}</select>
+            </div>
+            {dim_cols_novo}
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar regra</button>
+          </form>
+          {erro_html}
+        </div>
+
+        <table>
+          <thead><tr><th>Texto procurado</th><th>Categoria</th><th>Dimensoes</th><th></th></tr></thead>
+          <tbody>{linhas_html}</tbody>
+        </table>
       </div>
     </body></html>
     """
