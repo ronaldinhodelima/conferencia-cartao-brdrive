@@ -1038,6 +1038,32 @@ def regras_view():
                 (request.form.get("regra_id"),),
             )
             conn.commit()
+        elif acao == "editar_regra":
+            regra_id = request.form.get("regra_id")
+            padrao = (request.form.get("padrao") or "").strip()
+            categoria = request.form.get("categoria")
+            if not padrao:
+                erro = "Informe o texto a ser procurado na descricao."
+            else:
+                cur.execute(
+                    "UPDATE cartao.regra_classificacao SET padrao = %s, categoria = %s WHERE id = %s;",
+                    (padrao, categoria, regra_id),
+                )
+                cur.execute("DELETE FROM cartao.regra_dimensao_valor WHERE regra_id = %s;", (regra_id,))
+                for chave, valor in request.form.items():
+                    if chave.startswith("dim_") and valor:
+                        dim_id = chave.split("_", 1)[1]
+                        cur.execute(
+                            "INSERT INTO cartao.regra_dimensao_valor (regra_id, dimensao_id, valor_id) VALUES (%s, %s, %s);",
+                            (regra_id, dim_id, valor),
+                        )
+                # libera pendentes ja tocados por essa regra para reclassificar com os novos valores
+                cur.execute(
+                    "UPDATE cartao.transacao SET regra_aplicada_id = NULL "
+                    "WHERE regra_aplicada_id = %s AND conferida = false;",
+                    (regra_id,),
+                )
+                conn.commit()
 
     aplicar_regras(cur)
     conn.commit()
@@ -1067,8 +1093,11 @@ def regras_view():
     cur.close()
     conn.close()
 
-    def cat_options_regra():
-        return "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in todas_categorias)
+    def cat_options_regra(selecionado=None):
+        return "".join(
+            f'<option value="{c}" {"selected" if c == selecionado else ""}>{cat_pt(c)}</option>'
+            for c in todas_categorias
+        )
 
     def dim_options_regra(dimensao_id, selecionado=None):
         opts = ['<option value="">(nao definir)</option>']
@@ -1083,6 +1112,12 @@ def regras_view():
         for d in dimensoes
     )
 
+    editar_id = request.args.get("editar")
+    try:
+        editar_id = int(editar_id) if editar_id else None
+    except ValueError:
+        editar_id = None
+
     linhas = []
     for r in regras_db:
         dims_txt = []
@@ -1092,17 +1127,40 @@ def regras_view():
                 nome_valor = next((v["nome"] for v in valores_por_dim.get(d["id"], []) if v["id"] == vid), "?")
                 dims_txt.append(f'{d["nome"]}: {nome_valor}')
         dims_html = ", ".join(dims_txt) or "-"
-        linhas.append(
-            f'<tr><td><strong>"{r["padrao"]}"</strong></td><td>{cat_pt(r["categoria"])}</td><td>{dims_html}</td>'
-            f'<td style="white-space:nowrap">'
-            f'<form method="post" style="display:inline" onsubmit="return confirm(\'Reaplicar essa regra aos lancamentos pendentes?\')">'
-            f'<input type="hidden" name="acao" value="reaplicar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
-            f'<button type="submit" class="ver-btn">Reaplicar</button></form> '
-            f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir esta regra?\')">'
-            f'<input type="hidden" name="acao" value="excluir_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
-            f'<button type="submit" class="ver-btn">Excluir</button></form>'
-            f'</td></tr>'
-        )
+
+        if editar_id == r["id"]:
+            dim_cols_edit = "".join(
+                f'<div><label style="font-size:12px;color:#888;display:block">{d["nome"]}</label>'
+                f'<select name="dim_{d["id"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
+                f'{dim_options_regra(d["id"], dim_por_regra.get(r["id"], {}).get(d["id"]))}</select></div>'
+                for d in dimensoes
+            )
+            linhas.append(
+                f'<tr><td colspan="4">'
+                f'<form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;padding:8px 0">'
+                f'<input type="hidden" name="acao" value="editar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
+                f'<div><label style="font-size:12px;color:#888;display:block">Texto na descricao</label>'
+                f'<input name="padrao" value="{r["padrao"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px"></div>'
+                f'<div><label style="font-size:12px;color:#888;display:block">Categoria</label>'
+                f'<select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{cat_options_regra(r["categoria"])}</select></div>'
+                f'{dim_cols_edit}'
+                f'<button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>'
+                f'<a href="/regras" class="ver-btn" style="text-decoration:none">Cancelar</a>'
+                f'</form></td></tr>'
+            )
+        else:
+            linhas.append(
+                f'<tr><td><strong>"{r["padrao"]}"</strong></td><td>{cat_pt(r["categoria"])}</td><td>{dims_html}</td>'
+                f'<td style="white-space:nowrap">'
+                f'<a href="/regras?editar={r["id"]}" class="ver-btn" style="text-decoration:none">Editar</a> '
+                f'<form method="post" style="display:inline" onsubmit="return confirm(\'Reaplicar essa regra aos lancamentos pendentes?\')">'
+                f'<input type="hidden" name="acao" value="reaplicar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
+                f'<button type="submit" class="ver-btn">Reaplicar</button></form> '
+                f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir esta regra?\')">'
+                f'<input type="hidden" name="acao" value="excluir_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
+                f'<button type="submit" class="ver-btn">Excluir</button></form>'
+                f'</td></tr>'
+            )
     linhas_html = "".join(linhas) or '<tr><td colspan="4" style="text-align:center;color:#888;padding:16px">Nenhuma regra cadastrada ainda.</td></tr>'
 
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
