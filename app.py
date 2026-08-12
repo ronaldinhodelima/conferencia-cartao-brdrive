@@ -172,6 +172,40 @@ def migrate():
                         )
             conn.commit()
 
+        # dimensoes adicionais (ex: Responsavel, Projeto/Evento) - independentes do Centro de Custo
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.dimensao ("
+            "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
+            "obrigatoria boolean DEFAULT true, ordem integer DEFAULT 0);"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.dimensao_valor ("
+            "id serial PRIMARY KEY, "
+            "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
+            "nome text NOT NULL, UNIQUE(dimensao_id, nome));"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.transacao_dimensao ("
+            "transacao_id text NOT NULL, "
+            "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
+            "valor_id integer REFERENCES cartao.dimensao_valor(id) ON DELETE SET NULL, "
+            "PRIMARY KEY (transacao_id, dimensao_id));"
+        )
+        conn.commit()
+
+        cur.execute("SELECT COUNT(*) FROM cartao.dimensao;")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Responsável', true, 1) RETURNING id;")
+            resp_id = cur.fetchone()[0]
+            for nome in ("Ronaldo", "Andrea", "Amanda", "Compartilhado"):
+                cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (resp_id, nome))
+
+            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Projeto / Evento', false, 2) RETURNING id;")
+            proj_id = cur.fetchone()[0]
+            for nome in ("Geral", "Viagem Chile 2027"):
+                cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (proj_id, nome))
+            conn.commit()
+
         cur.close()
         conn.close()
     except Exception as e:
@@ -362,6 +396,24 @@ def index():
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
     nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
 
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+
+    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    valores_por_dim = {}
+    for v in cur.fetchall():
+        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
+
+    mapa_dim_transacao = {}
+    ids_visiveis = [r["transacao_id"] for r in rows]
+    if ids_visiveis:
+        cur.execute(
+            "SELECT transacao_id, dimensao_id, valor_id FROM cartao.transacao_dimensao WHERE transacao_id IN %s;",
+            (tuple(ids_visiveis),),
+        )
+        for m in cur.fetchall():
+            mapa_dim_transacao[(str(m["transacao_id"]), m["dimensao_id"])] = m["valor_id"]
+
     cur.close()
     conn.close()
 
@@ -381,6 +433,13 @@ def index():
             for c in categorias
         )
 
+    def dim_options(dimensao_id, selecionado):
+        opts = ['<option value="">(nao definido)</option>']
+        for v in valores_por_dim.get(dimensao_id, []):
+            sel = "selected" if selecionado == v["id"] else ""
+            opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
+        return "".join(opts)
+
     trs = []
     detalhes_js = {}
     for r in rows:
@@ -391,12 +450,27 @@ def index():
         data_fmt = data_local.strftime("%d/%m/%Y %H:%M")
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
+
+        dim_tds = []
+        dim_detalhes = {}
+        for d in dimensoes:
+            valor_sel = mapa_dim_transacao.get((str(rid), d["id"]))
+            faltando = d["obrigatoria"] and not valor_sel
+            estilo = ' style="border-color:#c0392b;background:#fff5f5"' if faltando else ""
+            dim_tds.append(
+                f'<td><select class="dim-select" data-dim="{d["id"]}"{estilo} '
+                f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
+            )
+            nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
+            dim_detalhes[d["nome"]] = nomes_valor.get(valor_sel, "(nao definido)")
+
         trs.append(
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td>{data_fmt}</td>'
             f'<td>{r["descricao"]}</td>'
             f'<td>{nome_cartao(r["numero_cartao_final"])}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
+            + "".join(dim_tds) +
             f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
             f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
             f'<td style="text-align:center"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
@@ -404,7 +478,7 @@ def index():
             f'<td><span class="status" id="status-{rid}">salvo</span></td>'
             f'</tr>'
         )
-        detalhes_js[str(rid)] = {
+        detalhes = {
             "data": data_fmt,
             "descricao": r["descricao"],
             "categoria": cat_pt(r["categoria"]),
@@ -418,11 +492,15 @@ def index():
             "conferida_por": r["conferida_por"] or "-",
             "observacao": r["observacao"] or "-",
         }
+        detalhes.update(dim_detalhes)
+        detalhes_js[str(rid)] = detalhes
 
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
-    body_rows = "".join(trs) if trs else '<tr><td colspan="9" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    colspan_total = 9 + len(dimensoes)
+    body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    dim_headers = "".join(f'<th>{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -436,6 +514,7 @@ def index():
         <div>Conferencia de Cartao - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
           <a href="/dre">DRE / Centro de Custos</a>
+          <a href="/dimensoes">Gerenciar dimensoes</a>
           <a href="/cartoes">Gerenciar cartoes</a>
           <a href="/logout">Sair</a>
         </div>
@@ -471,7 +550,7 @@ def index():
 
         <table>
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Cartao</th><th>Categoria</th><th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
+            <th>Data</th><th>Descricao</th><th>Cartao</th><th>Categoria</th>{dim_headers}<th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -499,6 +578,11 @@ def index():
           for (const k in labels) {{
             html += '<div class="row"><span>' + labels[k] + '</span><span>' + d[k] + '</span></div>';
           }}
+          for (const k in d) {{
+            if (!(k in labels)) {{
+              html += '<div class="row"><span>' + k + '</span><span>' + d[k] + '</span></div>';
+            }}
+          }}
           document.getElementById('modalBody').innerHTML = html;
           document.getElementById('modalBg').classList.add('show');
         }}
@@ -519,11 +603,16 @@ def index():
         const filaSalvar = {{}};
         function salvar(id, el) {{
           const tr = el.closest('tr');
+          const dimensoes = {{}};
+          tr.querySelectorAll('.dim-select').forEach(sel => {{
+            dimensoes[sel.dataset.dim] = sel.value || null;
+          }});
           const payload = {{
             conferida: tr.querySelector('.conf-check').checked,
             duplicada: tr.querySelector('.dup-check').checked,
             observacao: tr.querySelector('.obs-input').value,
-            categoria: tr.querySelector('.cat-select').value
+            categoria: tr.querySelector('.cat-select').value,
+            dimensoes: dimensoes
           }};
           const anterior = filaSalvar[id] || Promise.resolve();
           const atual = anterior.then(() => fetch('/api/transacao/' + id, {{
@@ -532,8 +621,21 @@ def index():
             body: JSON.stringify(payload)
           }})).then(r => r.json()).then(d => {{
             if (d.ok) {{
-              tr.classList.toggle('conferida', payload.conferida);
+              const confFinal = payload.conferida && !d.bloqueada;
+              tr.querySelector('.conf-check').checked = confFinal;
+              tr.classList.toggle('conferida', confFinal);
               tr.classList.toggle('duplicada', payload.duplicada);
+              tr.querySelectorAll('.dim-select').forEach(sel => {{
+                sel.style.borderColor = '';
+                sel.style.background = '';
+              }});
+              if (d.bloqueada) {{
+                (d.faltando || []).forEach(dimId => {{
+                  const sel = tr.querySelector('.dim-select[data-dim="' + dimId + '"]');
+                  if (sel) {{ sel.style.borderColor = '#c0392b'; sel.style.background = '#fff5f5'; }}
+                }});
+                alert('Nao foi possivel confirmar: preencha os campos obrigatorios destacados em vermelho.');
+              }}
               const s = document.getElementById('status-' + id);
               s.classList.add('show');
               setTimeout(() => s.classList.remove('show'), 1500);
@@ -560,26 +662,51 @@ def update_transacao(transacao_id):
     data = request.get_json(force=True)
     conn = get_conn()
     cur = conn.cursor()
+
+    dimensoes_enviadas = data.get("dimensoes") or {}
+    for dim_id_str, valor_id in dimensoes_enviadas.items():
+        try:
+            dim_id = int(dim_id_str)
+        except (TypeError, ValueError):
+            continue
+        valor_id_int = int(valor_id) if valor_id not in (None, "") else None
+        cur.execute(
+            "INSERT INTO cartao.transacao_dimensao (transacao_id, dimensao_id, valor_id) VALUES (%s,%s,%s) "
+            "ON CONFLICT (transacao_id, dimensao_id) DO UPDATE SET valor_id = EXCLUDED.valor_id;",
+            (transacao_id, dim_id, valor_id_int),
+        )
+
+    # trava: nao permite confirmar (conferida=true) sem preencher as dimensoes obrigatorias
+    cur.execute(
+        "SELECT d.id FROM cartao.dimensao d "
+        "LEFT JOIN cartao.transacao_dimensao td ON td.dimensao_id = d.id AND td.transacao_id = %s "
+        "WHERE d.obrigatoria = true AND (td.valor_id IS NULL);",
+        (transacao_id,),
+    )
+    faltando = [r[0] for r in cur.fetchall()]
+    bloqueada = bool(faltando) and data.get("conferida", False)
+    conferida_final = data.get("conferida", False) and not bloqueada
+
     cur.execute(
         "UPDATE cartao.transacao SET conferida = %s, duplicada = %s, observacao = %s, categoria = %s, "
         "conferida_por = CASE WHEN %s THEN %s ELSE conferida_por END, "
         "conferida_em = CASE WHEN %s THEN now() ELSE conferida_em END "
         "WHERE transacao_id = %s;",
         (
-            data.get("conferida", False),
+            conferida_final,
             data.get("duplicada", False),
             data.get("observacao"),
             data.get("categoria"),
-            data.get("conferida", False),
+            conferida_final,
             session.get("user"),
-            data.get("conferida", False),
+            conferida_final,
             transacao_id,
         ),
     )
     conn.commit()
     cur.close()
     conn.close()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "bloqueada": bloqueada, "faltando": faltando})
 
 
 @app.route("/cartoes", methods=["GET", "POST"])
@@ -653,6 +780,7 @@ def cartoes():
       <div class="topbar">
         <div>Gerenciar Cartoes - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
+          <a href="/dre">DRE</a>
           <a href="/">Voltar</a>
           <a href="/logout">Sair</a>
         </div>
@@ -680,6 +808,149 @@ def cartoes():
           <thead><tr><th>Nome / prefixo</th><th>Final do cartao</th><th></th></tr></thead>
           <tbody>{linhas}</tbody>
         </table>
+      </div>
+    </body></html>
+    """
+
+
+@app.route("/dimensoes", methods=["GET", "POST"])
+@login_required
+def dimensoes_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    erro = None
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        if acao == "criar_dimensao":
+            nome = (request.form.get("nome") or "").strip()
+            if not nome:
+                erro = "Informe o nome da dimensao."
+            else:
+                try:
+                    cur.execute(
+                        "INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES (%s,%s,%s);",
+                        (nome, request.form.get("obrigatoria") == "on", 99),
+                    )
+                    conn.commit()
+                except psycopg2.errors.UniqueViolation:
+                    conn.rollback()
+                    erro = f"Ja existe uma dimensao chamada '{nome}'."
+        elif acao == "editar_dimensao":
+            cur.execute(
+                "UPDATE cartao.dimensao SET nome=%s, obrigatoria=%s WHERE id=%s;",
+                ((request.form.get("nome") or "").strip(), request.form.get("obrigatoria") == "on", request.form.get("dimensao_id")),
+            )
+            conn.commit()
+        elif acao == "excluir_dimensao":
+            cur.execute("DELETE FROM cartao.dimensao WHERE id=%s;", (request.form.get("dimensao_id"),))
+            conn.commit()
+        elif acao == "criar_valor":
+            nome = (request.form.get("nome") or "").strip()
+            if nome:
+                try:
+                    cur.execute(
+                        "INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);",
+                        (request.form.get("dimensao_id"), nome),
+                    )
+                    conn.commit()
+                except psycopg2.errors.UniqueViolation:
+                    conn.rollback()
+                    erro = f"Ja existe o valor '{nome}' nessa dimensao."
+        elif acao == "editar_valor":
+            cur.execute(
+                "UPDATE cartao.dimensao_valor SET nome=%s WHERE id=%s;",
+                ((request.form.get("nome") or "").strip(), request.form.get("valor_id")),
+            )
+            conn.commit()
+        elif acao == "excluir_valor":
+            cur.execute("DELETE FROM cartao.dimensao_valor WHERE id=%s;", (request.form.get("valor_id"),))
+            conn.commit()
+
+    cur.execute("SELECT id, nome, obrigatoria, ordem FROM cartao.dimensao ORDER BY ordem, nome;")
+    dims = cur.fetchall()
+    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    valores_db = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    valores_por_dim = {}
+    for v in valores_db:
+        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
+
+    blocos = []
+    for d in dims:
+        valores = valores_por_dim.get(d["id"], [])
+        valores_rows = "".join(
+            f'<tr><td style="padding-left:24px">'
+            f'<form method="post" style="display:flex;gap:8px;align-items:center">'
+            f'<input type="hidden" name="acao" value="editar_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
+            f'<input name="nome" value="{v["nome"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">'
+            f'<button type="submit" class="ver-btn">Salvar</button>'
+            f'</form></td>'
+            f'<td><form method="post" onsubmit="return confirm(\'Excluir este valor?\')">'
+            f'<input type="hidden" name="acao" value="excluir_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
+            f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
+            for v in valores
+        ) or '<tr><td colspan="2" style="padding-left:24px;color:#888;font-size:13px">Nenhum valor cadastrado ainda.</td></tr>'
+
+        obrig_checked = "checked" if d["obrigatoria"] else ""
+        blocos.append(f"""
+        <details class="cat-breakdown" open style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
+            {d["nome"]} {"<span style='color:#c0392b;font-size:12px'>(obrigatorio)</span>" if d["obrigatoria"] else "<span style='color:#888;font-size:12px'>(opcional)</span>"}
+          </summary>
+          <div style="padding:0 18px 18px 18px">
+            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+              <input type="hidden" name="acao" value="editar_dimensao"><input type="hidden" name="dimensao_id" value="{d["id"]}">
+              <input name="nome" value="{d["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+              <label style="font-size:13px;color:#555"><input type="checkbox" name="obrigatoria" {obrig_checked}> obrigatorio para confirmar</label>
+              <button type="submit" class="ver-btn">Salvar</button>
+            </form>
+            <form method="post" style="display:inline" onsubmit="return confirm('Excluir esta dimensao e todos os seus valores?')">
+              <input type="hidden" name="acao" value="excluir_dimensao"><input type="hidden" name="dimensao_id" value="{d["id"]}">
+              <button type="submit" class="ver-btn">Excluir dimensao</button>
+            </form>
+            <table style="margin-top:12px"><tbody>{valores_rows}</tbody></table>
+            <form method="post" style="display:flex;gap:8px;align-items:center;margin-top:8px;padding-left:24px">
+              <input type="hidden" name="acao" value="criar_valor"><input type="hidden" name="dimensao_id" value="{d["id"]}">
+              <input name="nome" placeholder="Novo valor (ex: Amanda, Viagem Chile 2027)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:260px">
+              <button type="submit" class="ver-btn">+ Adicionar valor</button>
+            </form>
+          </div>
+        </details>
+        """)
+
+    erro_html = f'<p class="err">{erro}</p>' if erro else ''
+
+    return f"""
+    <html><head><title>Gerenciar Dimensoes</title>{BASE_CSS}</head>
+    <body>
+      <div class="topbar">
+        <div>Gerenciar Dimensoes - {session.get('user')}</div>
+        <div style="display:flex;gap:18px;align-items:center">
+          <a href="/dre">Ver DRE</a>
+          <a href="/">Voltar</a>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+      <div class="wrap">
+        <div style="font-size:13px;color:#666;margin-bottom:16px">
+          Dimensoes sao classificacoes independentes do Centro de Custo, aplicadas a cada lancamento
+          (ex: <strong>Responsavel</strong> - quem gastou, <strong>Projeto/Evento</strong> - a qual viagem ou evento pertence).
+          Dimensoes marcadas como obrigatorias impedem confirmar (marcar como conferida) um lancamento sem esse vinculo preenchido.
+        </div>
+        <div class="cat-breakdown">
+          <h3>Nova dimensao</h3>
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="criar_dimensao">
+            <input name="nome" placeholder="Ex: Cliente, Metodo de pagamento..." style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+            <label style="font-size:13px;color:#555"><input type="checkbox" name="obrigatoria" checked> obrigatorio para confirmar</label>
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar dimensao</button>
+          </form>
+          {erro_html}
+        </div>
+        {"".join(blocos)}
       </div>
     </body></html>
     """
@@ -745,6 +1016,24 @@ def dre():
         "ORDER BY g.nome, s.nome;"
     )
     linhas_map = cur.fetchall()
+
+    cur.execute("SELECT id, nome FROM cartao.dimensao ORDER BY ordem, nome;")
+    dims = cur.fetchall()
+    por_dimensao = []
+    for d in dims:
+        cur.execute(
+            "SELECT COALESCE(dv.nome, '(nao definido)') AS nome, "
+            "SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
+            "FROM cartao.transacao t "
+            "LEFT JOIN cartao.transacao_dimensao td ON td.transacao_id = t.transacao_id AND td.dimensao_id = %s "
+            "LEFT JOIN cartao.dimensao_valor dv ON dv.id = td.valor_id "
+            "WHERE to_char(t.data_transacao,'YYYY') = %s AND COALESCE(t.duplicada, false) = false "
+            "AND t.categoria NOT IN %s AND t.categoria IS NOT NULL "
+            "GROUP BY dv.nome ORDER BY total DESC;",
+            (d["id"], ano, CATEGORIAS_NAO_GASTO),
+        )
+        por_dimensao.append({"nome": d["nome"], "linhas": cur.fetchall()})
+
     cur.close()
     conn.close()
 
@@ -828,6 +1117,16 @@ def dre():
             f'{linhas_nc}</div>'
         )
 
+    blocos_dimensao = []
+    for pd in por_dimensao:
+        linhas_html = "".join(
+            f'<div class="cat-row"><span>{l["nome"]}</span><span>{_fmt_moeda(float(l["total"] or 0))}</span></div>'
+            for l in pd["linhas"]
+        ) or '<div class="cat-row"><span>Sem dados</span></div>'
+        blocos_dimensao.append(
+            f'<div class="cat-breakdown"><h3>Por {pd["nome"]}</h3>{linhas_html}</div>'
+        )
+
     anos_opcoes = "".join(
         f'<option value="{a}" {"selected" if str(a)==ano else ""}>{a}</option>'
         for a in range(hoje.year - 3, hoje.year + 1)
@@ -840,6 +1139,7 @@ def dre():
         <div>DRE / Centro de Custos - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
           <a href="/grupos">Gerenciar grupos</a>
+          <a href="/dimensoes">Gerenciar dimensoes</a>
           <a href="/">Voltar</a>
           <a href="/logout">Sair</a>
         </div>
@@ -852,6 +1152,7 @@ def dre():
           </div>
           <div style="margin-left:auto;font-size:14px"><strong>Total do ano: {_fmt_moeda(total_geral_anual)}</strong></div>
         </div>
+        {"".join(blocos_dimensao)}
         {"".join(blocos)}
       </div>
     </body></html>
@@ -939,26 +1240,31 @@ def grupos_view():
             for s in subs
         )
         grupos_html.append(f"""
-        <div class="cat-breakdown">
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-            <input name="nome" value="{g["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
-            <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
-            <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
-            <button type="submit" class="ver-btn">Salvar grupo</button>
-          </form>
-          <form method="post" style="display:inline" onsubmit="return confirm('Excluir grupo e seus subgrupos?')">
-            <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-            <button type="submit" class="ver-btn" style="margin-top:6px">Excluir grupo</button>
-          </form>
-          <table style="margin-top:10px"><tbody>{subs_rows}</tbody></table>
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding-left:24px">
-            <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-            <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
-            {input_num("teto_mensal", None)}{input_num("teto_anual", None)}
-            <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
-          </form>
-        </div>
+        <details class="cat-breakdown" style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
+            {g["nome"]} <span style="color:#888;font-weight:400;font-size:12px">({len(subs)} subgrupo{'s' if len(subs)!=1 else ''})</span>
+          </summary>
+          <div style="padding:0 18px 18px 18px">
+            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+              <input name="nome" value="{g["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
+              <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
+              <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
+              <button type="submit" class="ver-btn">Salvar grupo</button>
+            </form>
+            <form method="post" style="display:inline" onsubmit="return confirm('Excluir grupo e seus subgrupos?')">
+              <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+              <button type="submit" class="ver-btn" style="margin-top:6px">Excluir grupo</button>
+            </form>
+            <table style="margin-top:10px"><tbody>{subs_rows}</tbody></table>
+            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding-left:24px">
+              <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
+              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+              {input_num("teto_mensal", None)}{input_num("teto_anual", None)}
+              <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
+            </form>
+          </div>
+        </details>
         """)
 
     def opcoes_subgrupo(categoria_selecionada):
@@ -994,11 +1300,16 @@ def grupos_view():
         <div>Gerenciar Grupos de Custo - {session.get('user')}</div>
         <div style="display:flex;gap:18px;align-items:center">
           <a href="/dre">Ver DRE</a>
+          <a href="/dimensoes">Gerenciar dimensoes</a>
           <a href="/">Voltar</a>
           <a href="/logout">Sair</a>
         </div>
       </div>
       <div class="wrap">
+        <div style="font-size:13px;color:#666;margin-bottom:16px">
+          Isto e o <strong>Centro de Custo</strong> (o que voce gastou). Para classificar por pessoa, projeto/evento
+          ou outra dimensao independente, use <a href="/dimensoes">Gerenciar dimensoes</a>.
+        </div>
         <div class="cat-breakdown">
           <h3>Novo grupo</h3>
           <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1012,13 +1323,15 @@ def grupos_view():
 
         {"".join(grupos_html)}
 
-        <div class="cat-breakdown">
-          <h3>Vincular categorias aos subgrupos</h3>
-          <table>
-            <thead><tr><th>Categoria</th><th>Subgrupo</th></tr></thead>
-            <tbody>{categorias_rows}</tbody>
-          </table>
-        </div>
+        <details class="cat-breakdown" style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">Vincular categorias aos subgrupos</summary>
+          <div style="padding:0 18px 18px 18px">
+            <table>
+              <thead><tr><th>Categoria</th><th>Subgrupo</th></tr></thead>
+              <tbody>{categorias_rows}</tbody>
+            </table>
+          </div>
+        </details>
       </div>
     </body></html>
     """
