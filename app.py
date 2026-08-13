@@ -342,8 +342,50 @@ BASE_CSS = """
   .modal .row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #f2f2f2; font-size:14px; }
   .modal .row span:first-child { color:#888; }
   .modal .close { float:right; cursor:pointer; color:#888; font-size:20px; line-height:1; }
+  .cartao-cell { max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .nav-menu { display:flex; gap:18px; align-items:center; }
+  .nav-menu > a { color:#fff; text-decoration:none; font-size:14px; }
+  .nav-menu > a.ativo { text-decoration:underline; }
+  .dropdown { position:relative; display:inline-block; }
+  .dropbtn { color:#fff; font-size:14px; cursor:pointer; background:none; border:none; font-family:inherit; padding:0; display:flex; align-items:center; gap:4px; }
+  .dropdown-content { display:none; position:absolute; right:0; top:22px; background:#26374a; min-width:210px; border-radius:8px; overflow:hidden; box-shadow:0 6px 18px rgba(0,0,0,0.3); z-index:100; }
+  .dropdown-content a { display:block; padding:10px 14px; color:#fff; text-decoration:none; font-size:13px; }
+  .dropdown-content a:hover { background:#33475b; }
+  .dropdown-content a.ativo { background:#33475b; font-weight:600; }
+  .dropdown:hover .dropdown-content, .dropdown:focus-within .dropdown-content { display:block; }
+  .multisel { padding:6px; border:1px solid #ccc; border-radius:6px; min-width:170px; font-size:13px; }
+  .rel-filtros { background:#fff; border-radius:8px; padding:14px 16px; margin-bottom:16px; display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
+  .rel-filtros label { font-size:12px; color:#888; display:block; margin-bottom:3px; }
+  .rel-grupo-row { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid #f2f2f2; font-size:13px; }
+  .rel-grupo-row .barra { background:#eef1f5; border-radius:4px; height:6px; margin-top:3px; overflow:hidden; }
+  .rel-grupo-row .barra div { background:#2e6fd6; height:100%; }
 </style>
 """
+
+
+def topbar_html(titulo, ativo=None):
+    def cls(nome):
+        return "ativo" if ativo == nome else ""
+    return f"""
+      <div class="topbar">
+        <div>{titulo} - {session.get('user')}</div>
+        <div class="nav-menu">
+          <a href="/" class="{cls('inicio')}">Lançamentos</a>
+          <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
+          <div class="dropdown" tabindex="0">
+            <button class="dropbtn">Configurações ▾</button>
+            <div class="dropdown-content">
+              <a href="/dre" class="{cls('dre')}">DRE / Centro de Custos</a>
+              <a href="/grupos" class="{cls('grupos')}">Gerenciar grupos</a>
+              <a href="/dimensoes" class="{cls('dimensoes')}">Gerenciar dimensões</a>
+              <a href="/regras" class="{cls('regras')}">Regras automáticas</a>
+              <a href="/cartoes" class="{cls('cartoes')}">Gerenciar cartões</a>
+            </div>
+          </div>
+          <a href="/logout">Sair</a>
+        </div>
+      </div>
+    """
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -464,6 +506,12 @@ def index():
         prefixo = nomes_cartao.get(final4)
         return f"{prefixo} - final {final4}" if prefixo else f"final {final4}"
 
+    def nome_cartao_curto(final4):
+        if not final4:
+            return "-"
+        prefixo = nomes_cartao.get(final4)
+        return f"{prefixo} {final4}" if prefixo else final4
+
     dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
     proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
     proximo_vencimento = proxima_ocorrencia_dia(dia_vencimento) if dia_vencimento else None
@@ -509,7 +557,7 @@ def index():
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td>{data_fmt}</td>'
             f'<td>{r["descricao"]}</td>'
-            f'<td>{nome_cartao(r["numero_cartao_final"])}</td>'
+            f'<td class="cartao-cell" title="{nome_cartao(r["numero_cartao_final"])}">{nome_cartao_curto(r["numero_cartao_final"])}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
             f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
@@ -551,16 +599,7 @@ def index():
     return f"""
     <html><head><title>Conferencia de Cartao</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>Conferencia de Cartao - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/dre">DRE / Centro de Custos</a>
-          <a href="/dimensoes">Gerenciar dimensoes</a>
-          <a href="/regras">Regras automaticas</a>
-          <a href="/cartoes">Gerenciar cartoes</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('Conferência de Cartão', 'inicio')}
       <div class="wrap">
         <div class="filters">
           <div>
@@ -819,14 +858,7 @@ def cartoes():
     return f"""
     <html><head><title>Gerenciar Cartoes</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>Gerenciar Cartoes - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/dre">DRE</a>
-          <a href="/">Voltar</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('Gerenciar Cartões', 'cartoes')}
       <div class="wrap">
         <div class="cat-breakdown">
           <h3>{titulo_form}{cancelar_html}</h3>
@@ -968,15 +1000,7 @@ def dimensoes_view():
     return f"""
     <html><head><title>Gerenciar Dimensoes</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>Gerenciar Dimensoes - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/dre">Ver DRE</a>
-          <a href="/regras">Regras automaticas</a>
-          <a href="/">Voltar</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('Gerenciar Dimensões', 'dimensoes')}
       <div class="wrap">
         <div style="font-size:13px;color:#666;margin-bottom:16px">
           Dimensoes sao classificacoes independentes do Centro de Custo, aplicadas a cada lancamento
@@ -1168,13 +1192,7 @@ def regras_view():
     return f"""
     <html><head><title>Regras Automaticas</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>Regras Automaticas - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/">Voltar</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('Regras Automáticas', 'regras')}
       <div class="wrap">
         <div style="font-size:13px;color:#666;margin-bottom:16px">
           Quando a descricao de um lancamento <strong>pendente</strong> (nao conferido) contiver o texto cadastrado aqui,
@@ -1388,15 +1406,7 @@ def dre():
     return f"""
     <html><head><title>DRE / Centro de Custos</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>DRE / Centro de Custos - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/grupos">Gerenciar grupos</a>
-          <a href="/dimensoes">Gerenciar dimensoes</a>
-          <a href="/">Voltar</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('DRE / Centro de Custos', 'dre')}
       <div class="wrap">
         <div class="filters">
           <div>
@@ -1549,15 +1559,7 @@ def grupos_view():
     return f"""
     <html><head><title>Gerenciar Grupos de Custo</title>{BASE_CSS}</head>
     <body>
-      <div class="topbar">
-        <div>Gerenciar Grupos de Custo - {session.get('user')}</div>
-        <div style="display:flex;gap:18px;align-items:center">
-          <a href="/dre">Ver DRE</a>
-          <a href="/dimensoes">Gerenciar dimensoes</a>
-          <a href="/">Voltar</a>
-          <a href="/logout">Sair</a>
-        </div>
-      </div>
+      {topbar_html('Gerenciar Grupos de Custo', 'grupos')}
       <div class="wrap">
         <div style="font-size:13px;color:#666;margin-bottom:16px">
           Isto e o <strong>Centro de Custo</strong> (o que voce gastou). Para classificar por pessoa, projeto/evento
@@ -1582,6 +1584,231 @@ def grupos_view():
             <table>
               <thead><tr><th>Categoria</th><th>Subgrupo</th></tr></thead>
               <tbody>{categorias_rows}</tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </body></html>
+    """
+
+
+@app.route("/relatorios")
+@login_required
+def relatorios():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    aplicar_regras(cur)
+    conn.commit()
+
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    valores_por_dim = {}
+    for v in cur.fetchall():
+        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
+    cartoes_cadastrados = cur.fetchall()
+    nomes_cartao = {c["final4"]: c["prefixo"] for c in cartoes_cadastrados}
+
+    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
+    categorias_db = {r["categoria"] for r in cur.fetchall()}
+    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
+
+    cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
+    finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
+
+    # ---- filtros vindos da URL (todos multi-selecionaveis) ----
+    categorias_sel = request.args.getlist("categoria")
+    cartoes_sel = request.args.getlist("cartao")
+    data_ini = request.args.get("data_ini") or ""
+    data_fim = request.args.get("data_fim") or ""
+    agrupar = request.args.get("agrupar") or "categoria"
+    dim_sel = {}
+    for d in dimensoes:
+        vals = request.args.getlist(f"dim_{d['id']}")
+        if vals:
+            dim_sel[d["id"]] = vals
+
+    where = ["COALESCE(t.duplicada, false) = false"]
+    params = []
+    if categorias_sel:
+        where.append("t.categoria IN %s")
+        params.append(tuple(categorias_sel))
+    if cartoes_sel:
+        where.append("t.numero_cartao_final IN %s")
+        params.append(tuple(cartoes_sel))
+    if data_ini:
+        where.append("t.data_transacao >= %s")
+        params.append(data_ini)
+    if data_fim:
+        where.append("t.data_transacao <= %s")
+        params.append(data_fim + " 23:59:59")
+    for dim_id, vals in dim_sel.items():
+        where.append(
+            "EXISTS (SELECT 1 FROM cartao.transacao_dimensao td WHERE td.transacao_id = t.transacao_id::text "
+            "AND td.dimensao_id = %s AND td.valor_id IN %s)"
+        )
+        params.append(dim_id)
+        params.append(tuple(int(v) for v in vals))
+    where_sql = " AND ".join(where)
+
+    join_extra = ""
+    if agrupar == "categoria":
+        group_expr = "t.categoria"
+    elif agrupar == "cartao":
+        group_expr = "t.numero_cartao_final"
+    elif agrupar == "mes":
+        group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
+    elif agrupar.startswith("dim_"):
+        dim_id_grp = agrupar.split("_", 1)[1]
+        join_extra = (
+            f"LEFT JOIN cartao.transacao_dimensao tdg ON tdg.transacao_id = t.transacao_id::text "
+            f"AND tdg.dimensao_id = {int(dim_id_grp)} LEFT JOIN cartao.dimensao_valor dvg ON dvg.id = tdg.valor_id"
+        )
+        group_expr = "COALESCE(dvg.nome, '(nao definido)')"
+    else:
+        agrupar = "categoria"
+        group_expr = "t.categoria"
+
+    cur.execute(
+        f"SELECT {group_expr} AS grupo, COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
+        f"FROM cartao.transacao t {join_extra} WHERE {where_sql} GROUP BY {group_expr} ORDER BY total DESC;",
+        params,
+    )
+    grupos_raw = cur.fetchall()
+
+    cur.execute(
+        f"SELECT COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
+        f"FROM cartao.transacao t WHERE {where_sql};",
+        params,
+    )
+    totalizador = cur.fetchone()
+    total_geral = totalizador["total"] or 0
+    qtd_geral = totalizador["qtd"] or 0
+
+    cur.execute(
+        f"SELECT t.transacao_id, t.data_transacao, t.descricao, t.categoria, "
+        f"COALESCE(t.valor_brl, t.valor_original) AS valor, t.numero_cartao_final "
+        f"FROM cartao.transacao t WHERE {where_sql} ORDER BY t.data_transacao DESC LIMIT 500;",
+        params,
+    )
+    detalhe_rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    def nome_grupo(g):
+        if agrupar == "categoria":
+            return cat_pt(g)
+        if agrupar == "cartao":
+            if not g:
+                return "(sem cartao)"
+            prefixo = nomes_cartao.get(g)
+            return f"{prefixo} - final {g}" if prefixo else f"final {g}"
+        return g if g else "(nao definido)"
+
+    def nome_cartao_curto(final4):
+        if not final4:
+            return "-"
+        prefixo = nomes_cartao.get(final4)
+        return f"{prefixo} {final4}" if prefixo else final4
+
+    grupos_html = []
+    for g in grupos_raw:
+        total_g = g["total"] or 0
+        pct = (total_g / total_geral * 100) if total_geral else 0
+        grupos_html.append(
+            f'<div class="rel-grupo-row"><div style="flex:1"><div style="display:flex;justify-content:space-between">'
+            f'<span>{nome_grupo(g["grupo"])} <span style="color:#aaa">({g["qtd"]})</span></span>'
+            f'<span><strong>{_fmt_moeda(total_g)}</strong> <span style="color:#aaa">{pct:.0f}%</span></span></div>'
+            f'<div class="barra"><div style="width:{pct:.0f}%"></div></div></div></div>'
+        )
+    grupos_html_str = "".join(grupos_html) or '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>'
+
+    detalhe_html = "".join(
+        f'<tr><td>{(r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y")}</td>'
+        f'<td>{r["descricao"]}</td>'
+        f'<td class="cartao-cell">{nome_cartao_curto(r["numero_cartao_final"])}</td>'
+        f'<td>{cat_pt(r["categoria"])}</td>'
+        f'<td class="valor">R$ {r["valor"]:,.2f}</td></tr>'
+        for r in detalhe_rows
+    ) or '<tr><td colspan="5" style="text-align:center;color:#888;padding:16px">Nenhum lancamento encontrado.</td></tr>'
+
+    def multisel_categoria():
+        opts = "".join(
+            f'<option value="{c}" {"selected" if c in categorias_sel else ""}>{cat_pt(c)}</option>'
+            for c in todas_categorias
+        )
+        return f'<select name="categoria" multiple size="6" class="multisel">{opts}</select>'
+
+    def multisel_cartao():
+        opts = []
+        for c in cartoes_cadastrados:
+            sel = "selected" if c["final4"] in cartoes_sel else ""
+            opts.append(f'<option value="{c["final4"]}" {sel}>{c["prefixo"]} - final {c["final4"]}</option>')
+        registrados = {c["final4"] for c in cartoes_cadastrados}
+        for f in finais_usados:
+            if f not in registrados:
+                sel = "selected" if f in cartoes_sel else ""
+                opts.append(f'<option value="{f}" {sel}>final {f}</option>')
+        return f'<select name="cartao" multiple size="6" class="multisel">{"".join(opts)}</select>'
+
+    def multisel_dim(d):
+        opts = "".join(
+            f'<option value="{v["id"]}" {"selected" if str(v["id"]) in dim_sel.get(d["id"], []) else ""}>{v["nome"]}</option>'
+            for v in valores_por_dim.get(d["id"], [])
+        )
+        return f'<select name="dim_{d["id"]}" multiple size="6" class="multisel">{opts}</select>'
+
+    dims_filtros_html = "".join(
+        f'<div><label>{d["nome"]}</label>{multisel_dim(d)}</div>' for d in dimensoes if valores_por_dim.get(d["id"])
+    )
+
+    agrupar_opcoes = [("categoria", "Categoria"), ("cartao", "Cartão"), ("mes", "Período (mês)")]
+    agrupar_opcoes += [(f"dim_{d['id']}", d["nome"]) for d in dimensoes]
+    agrupar_opcoes_html = "".join(
+        f'<option value="{val}" {"selected" if val == agrupar else ""}>{label}</option>'
+        for val, label in agrupar_opcoes
+    )
+
+    return f"""
+    <html><head><title>Relatórios</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Relatórios', 'relatorios')}
+      <div class="wrap">
+        <form method="get">
+          <div class="rel-filtros">
+            <div><label>Agrupar por</label><select name="agrupar" class="multisel" style="min-width:160px" onchange="this.form.submit()">{agrupar_opcoes_html}</select></div>
+            <div><label>Categoria</label>{multisel_categoria()}</div>
+            <div><label>Cartão</label>{multisel_cartao()}</div>
+            {dims_filtros_html}
+            <div><label>Data inicial</label><input type="date" name="data_ini" value="{data_ini}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px"></div>
+            <div><label>Data final</label><input type="date" name="data_fim" value="{data_fim}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px"></div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Filtrar</button>
+              <a href="/relatorios" style="font-size:12px;text-align:center">limpar filtros</a>
+            </div>
+          </div>
+        </form>
+
+        <div class="cards">
+          <div class="card"><div class="label">Total no filtro</div><div class="val">{_fmt_moeda(total_geral)}</div></div>
+          <div class="card"><div class="label">Lançamentos</div><div class="val">{qtd_geral}</div></div>
+        </div>
+
+        <div class="cat-breakdown">
+          <h3>Totais agrupados</h3>
+          {grupos_html_str}
+        </div>
+
+        <details class="cat-breakdown" style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">Ver lançamentos ({len(detalhe_rows)}{'​' if len(detalhe_rows) < 500 else '+'})</summary>
+          <div style="padding:0 18px 18px 18px">
+            <table>
+              <thead><tr><th>Data</th><th>Descrição</th><th>Cartão</th><th>Categoria</th><th>Valor</th></tr></thead>
+              <tbody>{detalhe_html}</tbody>
             </table>
           </div>
         </details>
