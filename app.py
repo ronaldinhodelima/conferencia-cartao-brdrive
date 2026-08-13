@@ -510,7 +510,7 @@ def index():
         if not final4:
             return "-"
         prefixo = nomes_cartao.get(final4)
-        return f"{prefixo} {final4}" if prefixo else final4
+        return prefixo if prefixo else f"final {final4}"
 
     dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
     proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
@@ -1718,7 +1718,7 @@ def relatorios():
         if not final4:
             return "-"
         prefixo = nomes_cartao.get(final4)
-        return f"{prefixo} {final4}" if prefixo else final4
+        return prefixo if prefixo else f"final {final4}"
 
     grupos_html = []
     for g in grupos_raw:
@@ -1746,7 +1746,7 @@ def relatorios():
             f'<option value="{c}" {"selected" if c in categorias_sel else ""}>{cat_pt(c)}</option>'
             for c in todas_categorias
         )
-        return f'<select name="categoria" multiple size="6" class="multisel">{opts}</select>'
+        return f'<select name="categoria" multiple size="6" class="multisel" onchange="this.form.submit()">{opts}</select>'
 
     def multisel_cartao():
         opts = []
@@ -1758,14 +1758,14 @@ def relatorios():
             if f not in registrados:
                 sel = "selected" if f in cartoes_sel else ""
                 opts.append(f'<option value="{f}" {sel}>final {f}</option>')
-        return f'<select name="cartao" multiple size="6" class="multisel">{"".join(opts)}</select>'
+        return f'<select name="cartao" multiple size="6" class="multisel" onchange="this.form.submit()">{"".join(opts)}</select>'
 
     def multisel_dim(d):
         opts = "".join(
             f'<option value="{v["id"]}" {"selected" if str(v["id"]) in dim_sel.get(d["id"], []) else ""}>{v["nome"]}</option>'
             for v in valores_por_dim.get(d["id"], [])
         )
-        return f'<select name="dim_{d["id"]}" multiple size="6" class="multisel">{opts}</select>'
+        return f'<select name="dim_{d["id"]}" multiple size="6" class="multisel" onchange="this.form.submit()">{opts}</select>'
 
     dims_filtros_html = "".join(
         f'<div><label>{d["nome"]}</label>{multisel_dim(d)}</div>' for d in dimensoes if valores_por_dim.get(d["id"])
@@ -1793,8 +1793,8 @@ def relatorios():
             <div><label>Categoria</label>{multisel_categoria()}</div>
             <div><label>Cartão</label>{multisel_cartao()}</div>
             {dims_filtros_html}
-            <div><label>Data inicial</label><input type="date" name="data_ini" value="{data_ini}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px"></div>
-            <div><label>Data final</label><input type="date" name="data_fim" value="{data_fim}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px"></div>
+            <div><label>Data inicial</label><input type="date" name="data_ini" value="{data_ini}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px" onchange="this.form.submit()"></div>
+            <div><label>Data final</label><input type="date" name="data_fim" value="{data_fim}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px" onchange="this.form.submit()"></div>
             <div style="display:flex;flex-direction:column;gap:6px">
               <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Filtrar</button>
               <a href="/relatorios" style="font-size:12px;text-align:center">limpar filtros</a>
