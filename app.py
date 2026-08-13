@@ -1636,6 +1636,11 @@ def relatorios():
     if categorias_sel:
         where.append("t.categoria IN %s")
         params.append(tuple(categorias_sel))
+    else:
+        # sem filtro explicito de categoria: exclui por padrao o que nao e gasto real
+        # (pagamento de fatura, juros, tarifas, transferencia interna) para o total fazer sentido
+        where.append("(t.categoria NOT IN %s OR t.categoria IS NULL)")
+        params.append(CATEGORIAS_NAO_GASTO)
     if cartoes_sel:
         where.append("t.numero_cartao_final IN %s")
         params.append(tuple(cartoes_sel))
@@ -1778,6 +1783,10 @@ def relatorios():
     <body>
       {topbar_html('Relatórios', 'relatorios')}
       <div class="wrap">
+        <div style="font-size:12px;color:#888;margin-bottom:10px">
+          Por padrão os totais nao incluem pagamento de fatura, juros, tarifas e transferencia interna (nao sao gasto real).
+          Selecione uma categoria especifica para incluir esses lancamentos.
+        </div>
         <form method="get">
           <div class="rel-filtros">
             <div><label>Agrupar por</label><select name="agrupar" class="multisel" style="min-width:160px" onchange="this.form.submit()">{agrupar_opcoes_html}</select></div>
