@@ -1755,7 +1755,7 @@ def relatorios():
             f'<div class="barra"><div style="width:{max(pct, 0):.0f}%"></div></div></div></div>'
         )
         chart_labels.append(nome_g)
-        chart_valores.append(round(total_g, 2))
+        chart_valores.append(float(round(total_g, 2)))
     grupos_html_str = "".join(grupos_html) or '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>'
 
     detalhe_html = "".join(
