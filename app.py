@@ -354,11 +354,32 @@ BASE_CSS = """
   .dropdown-content a.ativo { background:#33475b; font-weight:600; }
   .dropdown:hover .dropdown-content, .dropdown:focus-within .dropdown-content { display:block; }
   .multisel { padding:6px; border:1px solid #ccc; border-radius:6px; min-width:170px; font-size:13px; }
-  .rel-filtros { background:#fff; border-radius:8px; padding:14px 16px; margin-bottom:16px; display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
+  .rel-filtros { background:#fff; border-radius:12px; padding:16px 18px; margin-bottom:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
   .rel-filtros label { font-size:12px; color:#888; display:block; margin-bottom:3px; }
   .rel-grupo-row { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid #f2f2f2; font-size:13px; }
   .rel-grupo-row .barra { background:#eef1f5; border-radius:4px; height:6px; margin-top:3px; overflow:hidden; }
   .rel-grupo-row .barra div { background:#2e6fd6; height:100%; }
+  .chipfilter { position:relative; display:inline-block; }
+  .chip-btn { display:flex; align-items:center; gap:6px; background:#fff; border:1.5px solid #dde2e8; border-radius:20px; padding:8px 14px; font-size:13px; color:#444; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .chip-btn:hover { border-color:#b7c0cc; }
+  .chip-btn.ativo { border-color:#2e6fd6; color:#2e6fd6; background:#eef4ff; font-weight:600; }
+  .chip-btn .chip-plus { font-size:15px; line-height:1; }
+  .chip-btn .chip-clear { margin-left:2px; color:#999; font-weight:700; }
+  .chip-btn .chip-clear:hover { color:#c0392b; }
+  .chip-panel { display:none; position:absolute; top:calc(100% + 8px); left:0; background:#fff; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.18); width:260px; z-index:200; overflow:hidden; border:1px solid #eee; }
+  .chip-panel.show { display:block; }
+  .chip-search-wrap { padding:10px; border-bottom:1px solid #f0f0f0; }
+  .chip-search { width:100%; padding:8px 10px; border:none; background:#f2f3f5; border-radius:8px; font-size:13px; outline:none; }
+  .chip-list { max-height:260px; overflow-y:auto; padding:6px; }
+  .chip-opt { display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:8px; font-size:13px; cursor:pointer; color:#333; }
+  .chip-opt:hover, .chip-opt.chip-hover { background:#f2f5fa; }
+  .chip-opt input { accent-color:#2e6fd6; width:15px; height:15px; }
+  .chip-opt.chip-checked { background:#eef4ff; font-weight:600; }
+  .rel-datewrap { display:flex; gap:8px; align-items:center; background:#fff; border:1.5px solid #dde2e8; border-radius:20px; padding:6px 12px; }
+  .rel-datewrap input[type=date] { border:none; font-size:13px; padding:2px; outline:none; }
+  .rel-actions { margin-left:auto; display:flex; gap:10px; align-items:center; }
+  .chart-card { background:#fff; border-radius:12px; padding:18px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
+  .chart-card h3 { margin:0 0 14px 0; font-size:14px; color:#444; }
 </style>
 """
 
@@ -1721,15 +1742,20 @@ def relatorios():
         return prefixo if prefixo else f"final {final4}"
 
     grupos_html = []
+    chart_labels = []
+    chart_valores = []
     for g in grupos_raw:
         total_g = g["total"] or 0
         pct = (total_g / total_geral * 100) if total_geral else 0
+        nome_g = nome_grupo(g["grupo"])
         grupos_html.append(
             f'<div class="rel-grupo-row"><div style="flex:1"><div style="display:flex;justify-content:space-between">'
-            f'<span>{nome_grupo(g["grupo"])} <span style="color:#aaa">({g["qtd"]})</span></span>'
+            f'<span>{nome_g} <span style="color:#aaa">({g["qtd"]})</span></span>'
             f'<span><strong>{_fmt_moeda(total_g)}</strong> <span style="color:#aaa">{pct:.0f}%</span></span></div>'
-            f'<div class="barra"><div style="width:{pct:.0f}%"></div></div></div></div>'
+            f'<div class="barra"><div style="width:{max(pct, 0):.0f}%"></div></div></div></div>'
         )
+        chart_labels.append(nome_g)
+        chart_valores.append(round(total_g, 2))
     grupos_html_str = "".join(grupos_html) or '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>'
 
     detalhe_html = "".join(
@@ -1741,35 +1767,38 @@ def relatorios():
         for r in detalhe_rows
     ) or '<tr><td colspan="5" style="text-align:center;color:#888;padding:16px">Nenhum lancamento encontrado.</td></tr>'
 
-    def multisel_categoria():
-        opts = "".join(
-            f'<option value="{c}" {"selected" if c in categorias_sel else ""}>{cat_pt(c)}</option>'
-            for c in todas_categorias
+    def chip_filter(nome, label, opcoes, selecionados):
+        """opcoes: lista de (value, texto). selecionados: lista de strings (values marcados)."""
+        n_sel = len(selecionados)
+        opts_html = "".join(
+            f'<label class="chip-opt {"chip-checked" if str(val) in selecionados else ""}">'
+            f'<input type="checkbox" name="{nome}" value="{val}" {"checked" if str(val) in selecionados else ""} '
+            f'onchange="cfOnChange(this)"> {texto}</label>'
+            for val, texto in opcoes
         )
-        return f'<select name="categoria" multiple size="6" class="multisel" onchange="this.form.submit()">{opts}</select>'
-
-    def multisel_cartao():
-        opts = []
-        for c in cartoes_cadastrados:
-            sel = "selected" if c["final4"] in cartoes_sel else ""
-            opts.append(f'<option value="{c["final4"]}" {sel}>{c["prefixo"]} - final {c["final4"]}</option>')
-        registrados = {c["final4"] for c in cartoes_cadastrados}
-        for f in finais_usados:
-            if f not in registrados:
-                sel = "selected" if f in cartoes_sel else ""
-                opts.append(f'<option value="{f}" {sel}>final {f}</option>')
-        return f'<select name="cartao" multiple size="6" class="multisel" onchange="this.form.submit()">{"".join(opts)}</select>'
-
-    def multisel_dim(d):
-        opts = "".join(
-            f'<option value="{v["id"]}" {"selected" if str(v["id"]) in dim_sel.get(d["id"], []) else ""}>{v["nome"]}</option>'
-            for v in valores_por_dim.get(d["id"], [])
-        )
-        return f'<select name="dim_{d["id"]}" multiple size="6" class="multisel" onchange="this.form.submit()">{opts}</select>'
+        return f"""
+        <div class="chipfilter">
+          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" onclick="cfToggle(this)">
+            <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
+            {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
+          </button>
+          <div class="chip-panel">
+            <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
+            <div class="chip-list">{opts_html}</div>
+          </div>
+        </div>
+        """
 
     dims_filtros_html = "".join(
-        f'<div><label>{d["nome"]}</label>{multisel_dim(d)}</div>' for d in dimensoes if valores_por_dim.get(d["id"])
+        chip_filter(f"dim_{d['id']}", d["nome"],
+                    [(v["id"], v["nome"]) for v in valores_por_dim.get(d["id"], [])],
+                    dim_sel.get(d["id"], []))
+        for d in dimensoes if valores_por_dim.get(d["id"])
     )
+
+    cartao_opcoes = [(c["final4"], f'{c["prefixo"]} - final {c["final4"]}') for c in cartoes_cadastrados]
+    registrados = {c["final4"] for c in cartoes_cadastrados}
+    cartao_opcoes += [(f, f"final {f}") for f in finais_usados if f not in registrados]
 
     agrupar_opcoes = [("categoria", "Categoria"), ("cartao", "Cartão"), ("mes", "Período (mês)")]
     agrupar_opcoes += [(f"dim_{d['id']}", d["nome"]) for d in dimensoes]
@@ -1779,7 +1808,9 @@ def relatorios():
     )
 
     return f"""
-    <html><head><title>Relatórios</title>{BASE_CSS}</head>
+    <html><head><title>Relatórios</title>{BASE_CSS}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    </head>
     <body>
       {topbar_html('Relatórios', 'relatorios')}
       <div class="wrap">
@@ -1787,17 +1818,19 @@ def relatorios():
           Por padrão os totais nao incluem pagamento de fatura, juros, tarifas e transferencia interna (nao sao gasto real).
           Selecione uma categoria especifica para incluir esses lancamentos.
         </div>
-        <form method="get">
+        <form method="get" id="formFiltros">
           <div class="rel-filtros">
-            <div><label>Agrupar por</label><select name="agrupar" class="multisel" style="min-width:160px" onchange="this.form.submit()">{agrupar_opcoes_html}</select></div>
-            <div><label>Categoria</label>{multisel_categoria()}</div>
-            <div><label>Cartão</label>{multisel_cartao()}</div>
+            <select name="agrupar" class="chip-btn" style="border-radius:20px" onchange="this.form.submit()">{agrupar_opcoes_html}</select>
+            {chip_filter('categoria', 'Categoria', [(c, cat_pt(c)) for c in todas_categorias], categorias_sel)}
+            {chip_filter('cartao', 'Cartão', cartao_opcoes, cartoes_sel)}
             {dims_filtros_html}
-            <div><label>Data inicial</label><input type="date" name="data_ini" value="{data_ini}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px" onchange="this.form.submit()"></div>
-            <div><label>Data final</label><input type="date" name="data_fim" value="{data_fim}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px" onchange="this.form.submit()"></div>
-            <div style="display:flex;flex-direction:column;gap:6px">
-              <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Filtrar</button>
-              <a href="/relatorios" style="font-size:12px;text-align:center">limpar filtros</a>
+            <div class="rel-datewrap">
+              <input type="date" name="data_ini" value="{data_ini}" onchange="this.form.submit()">
+              <span style="color:#bbb">–</span>
+              <input type="date" name="data_fim" value="{data_fim}" onchange="this.form.submit()">
+            </div>
+            <div class="rel-actions">
+              <a href="/relatorios" class="chip-btn" style="text-decoration:none">Limpar tudo</a>
             </div>
           </div>
         </form>
@@ -1805,6 +1838,11 @@ def relatorios():
         <div class="cards">
           <div class="card"><div class="label">Total no filtro</div><div class="val">{_fmt_moeda(total_geral)}</div></div>
           <div class="card"><div class="label">Lançamentos</div><div class="val">{qtd_geral}</div></div>
+        </div>
+
+        <div class="chart-card">
+          <h3>Gráfico ({dict(agrupar_opcoes).get(agrupar, agrupar)})</h3>
+          <canvas id="chartGrupos" height="90"></canvas>
         </div>
 
         <div class="cat-breakdown">
@@ -1822,6 +1860,93 @@ def relatorios():
           </div>
         </details>
       </div>
+
+      <script>
+        // ---- chip filters: dropdown com busca, checkbox toggle e navegacao por teclado ----
+        function cfToggle(btn) {{
+          const panel = btn.nextElementSibling;
+          const abrir = !panel.classList.contains('show');
+          document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
+          if (abrir) {{
+            panel.classList.add('show');
+            const search = panel.querySelector('.chip-search');
+            if (search) {{ search.value = ''; cfFiltrar(search); search.focus(); }}
+          }}
+        }}
+        document.addEventListener('click', function(e) {{
+          if (!e.target.closest('.chipfilter')) {{
+            document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
+          }}
+        }});
+        function cfOnChange(input) {{
+          const opt = input.closest('.chip-opt');
+          opt.classList.toggle('chip-checked', input.checked);
+          input.form.submit();
+        }}
+        function cfClear(e, btn) {{
+          e.stopPropagation();
+          const panel = btn.parentElement.nextElementSibling;
+          panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+          btn.form ? btn.form.submit() : document.getElementById('formFiltros').submit();
+        }}
+        function cfFiltrar(input) {{
+          const panel = input.closest('.chip-panel');
+          const q = input.value.toLowerCase();
+          panel.querySelectorAll('.chip-opt').forEach(opt => {{
+            opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+          }});
+          panel.querySelectorAll('.chip-hover').forEach(o => o.classList.remove('chip-hover'));
+        }}
+        function cfKeydown(e, input) {{
+          const panel = input.closest('.chip-panel');
+          const visiveis = Array.from(panel.querySelectorAll('.chip-opt')).filter(o => o.style.display !== 'none');
+          let idx = visiveis.findIndex(o => o.classList.contains('chip-hover'));
+          if (e.key === 'ArrowDown') {{
+            e.preventDefault();
+            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+            idx = Math.min(idx + 1, visiveis.length - 1);
+            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+          }} else if (e.key === 'ArrowUp') {{
+            e.preventDefault();
+            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+            idx = Math.max(idx - 1, 0);
+            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+          }} else if (e.key === 'Enter') {{
+            e.preventDefault();
+            if (idx >= 0) {{
+              const cb = visiveis[idx].querySelector('input[type=checkbox]');
+              cb.checked = !cb.checked;
+              cfOnChange(cb);
+            }}
+          }} else if (e.key === 'Escape') {{
+            panel.classList.remove('show');
+          }}
+        }}
+
+        // ---- grafico dinamico conforme os filtros aplicados ----
+        const chartLabels = {json.dumps(chart_labels)};
+        const chartValores = {json.dumps(chart_valores)};
+        if (window.Chart) {{
+          new Chart(document.getElementById('chartGrupos'), {{
+            type: 'bar',
+            data: {{
+              labels: chartLabels,
+              datasets: [{{
+                label: 'Total (R$)',
+                data: chartValores,
+                backgroundColor: '#2e6fd6',
+                borderRadius: 4,
+                maxBarThickness: 46
+              }}]
+            }},
+            options: {{
+              responsive: true,
+              plugins: {{ legend: {{ display: false }} }},
+              scales: {{ y: {{ beginAtZero: true }} }}
+            }}
+          }});
+        }}
+      </script>
     </body></html>
     """
 
