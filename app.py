@@ -374,7 +374,11 @@ BASE_CSS = """
   .chip-opt { display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:8px; font-size:13px; cursor:pointer; color:#333; }
   .chip-opt:hover, .chip-opt.chip-hover { background:#f2f5fa; }
   .chip-opt input { accent-color:#2e6fd6; width:15px; height:15px; }
-  .chip-opt.chip-checked { background:#eef4ff; font-weight:600; }
+  .rel-grupo-detalhe { background:#fafbfc; border-radius:8px; margin:4px 0 10px 0; overflow:hidden; }
+  .rel-mini-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  .rel-mini-table th { text-align:left; padding:7px 10px; color:#999; font-weight:600; text-transform:uppercase; font-size:10.5px; border-bottom:1px solid #eee; }
+  .rel-mini-table td { padding:7px 10px; border-bottom:1px solid #f0f0f0; }
+  .rel-mini-table .valor { text-align:right; white-space:nowrap; }
   .rel-datewrap { display:flex; gap:8px; align-items:center; background:#fff; border:1.5px solid #dde2e8; border-radius:20px; padding:6px 12px; }
   .rel-datewrap input[type=date] { border:none; font-size:13px; padding:2px; outline:none; }
   .rel-actions { margin-left:auto; display:flex; gap:10px; align-items:center; }
@@ -1613,34 +1617,9 @@ def grupos_view():
     """
 
 
-@app.route("/relatorios")
-@login_required
-def relatorios():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    aplicar_regras(cur)
-    conn.commit()
-
-    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
-    dimensoes = cur.fetchall()
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
-    valores_por_dim = {}
-    for v in cur.fetchall():
-        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
-
-    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
-    cartoes_cadastrados = cur.fetchall()
-    nomes_cartao = {c["final4"]: c["prefixo"] for c in cartoes_cadastrados}
-
-    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
-    categorias_db = {r["categoria"] for r in cur.fetchall()}
-    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
-
-    cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
-    finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
-
-    # ---- filtros vindos da URL (todos multi-selecionaveis) ----
+def _montar_filtro_relatorio(dimensoes):
+    """Le os filtros da querystring (request.args) e monta where/params/group_expr reutilizaveis
+    tanto pela pagina quanto pelos endpoints de dados (AJAX)."""
     categorias_sel = request.args.getlist("categoria")
     cartoes_sel = request.args.getlist("cartao")
     data_ini = request.args.get("data_ini") or ""
@@ -1698,87 +1677,62 @@ def relatorios():
         agrupar = "categoria"
         group_expr = "t.categoria"
 
-    cur.execute(
-        f"SELECT {group_expr} AS grupo, COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-        f"FROM cartao.transacao t {join_extra} WHERE {where_sql} GROUP BY {group_expr} ORDER BY total DESC;",
-        params,
-    )
-    grupos_raw = cur.fetchall()
+    return {
+        "categorias_sel": categorias_sel,
+        "cartoes_sel": cartoes_sel,
+        "data_ini": data_ini,
+        "data_fim": data_fim,
+        "agrupar": agrupar,
+        "dim_sel": dim_sel,
+        "where_sql": where_sql,
+        "params": params,
+        "join_extra": join_extra,
+        "group_expr": group_expr,
+    }
 
-    cur.execute(
-        f"SELECT COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-        f"FROM cartao.transacao t WHERE {where_sql};",
-        params,
-    )
-    totalizador = cur.fetchone()
-    total_geral = totalizador["total"] or 0
-    qtd_geral = totalizador["qtd"] or 0
 
-    cur.execute(
-        f"SELECT t.transacao_id, t.data_transacao, t.descricao, t.categoria, "
-        f"COALESCE(t.valor_brl, t.valor_original) AS valor, t.numero_cartao_final "
-        f"FROM cartao.transacao t WHERE {where_sql} ORDER BY t.data_transacao DESC LIMIT 500;",
-        params,
-    )
-    detalhe_rows = cur.fetchall()
+@app.route("/relatorios")
+@login_required
+def relatorios():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    aplicar_regras(cur)
+    conn.commit()
+
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    valores_por_dim = {}
+    for v in cur.fetchall():
+        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
+    cartoes_cadastrados = cur.fetchall()
+
+    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
+    categorias_db = {r["categoria"] for r in cur.fetchall()}
+    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
+
+    cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
+    finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
+
+    cfg = _montar_filtro_relatorio(dimensoes)
     cur.close()
     conn.close()
-
-    def nome_grupo(g):
-        if agrupar == "categoria":
-            return cat_pt(g)
-        if agrupar == "cartao":
-            if not g:
-                return "(sem cartao)"
-            prefixo = nomes_cartao.get(g)
-            return f"{prefixo} - final {g}" if prefixo else f"final {g}"
-        return g if g else "(nao definido)"
-
-    def nome_cartao_curto(final4):
-        if not final4:
-            return "-"
-        prefixo = nomes_cartao.get(final4)
-        return prefixo if prefixo else f"final {final4}"
-
-    grupos_html = []
-    chart_labels = []
-    chart_valores = []
-    for g in grupos_raw:
-        total_g = g["total"] or 0
-        pct = (total_g / total_geral * 100) if total_geral else 0
-        nome_g = nome_grupo(g["grupo"])
-        grupos_html.append(
-            f'<div class="rel-grupo-row"><div style="flex:1"><div style="display:flex;justify-content:space-between">'
-            f'<span>{nome_g} <span style="color:#aaa">({g["qtd"]})</span></span>'
-            f'<span><strong>{_fmt_moeda(total_g)}</strong> <span style="color:#aaa">{pct:.0f}%</span></span></div>'
-            f'<div class="barra"><div style="width:{max(pct, 0):.0f}%"></div></div></div></div>'
-        )
-        chart_labels.append(nome_g)
-        chart_valores.append(float(round(total_g, 2)))
-    grupos_html_str = "".join(grupos_html) or '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>'
-
-    detalhe_html = "".join(
-        f'<tr><td>{(r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y")}</td>'
-        f'<td>{r["descricao"]}</td>'
-        f'<td class="cartao-cell">{nome_cartao_curto(r["numero_cartao_final"])}</td>'
-        f'<td>{cat_pt(r["categoria"])}</td>'
-        f'<td class="valor">R$ {r["valor"]:,.2f}</td></tr>'
-        for r in detalhe_rows
-    ) or '<tr><td colspan="5" style="text-align:center;color:#888;padding:16px">Nenhum lancamento encontrado.</td></tr>'
 
     def chip_filter(nome, label, opcoes, selecionados):
         """opcoes: lista de (value, texto). selecionados: lista de strings (values marcados)."""
         n_sel = len(selecionados)
         opts_html = "".join(
-            f'<label class="chip-opt {"chip-checked" if str(val) in selecionados else ""}">'
+            f'<label class="chip-opt">'
             f'<input type="checkbox" name="{nome}" value="{val}" {"checked" if str(val) in selecionados else ""} '
-            f'onchange="cfOnChange(this)"> {texto}</label>'
+            f'onchange="aplicarFiltros()"> {texto}</label>'
             for val, texto in opcoes
         )
         return f"""
         <div class="chipfilter">
-          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" onclick="cfToggle(this)">
+          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
             <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
             {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
           </button>
@@ -1792,7 +1746,7 @@ def relatorios():
     dims_filtros_html = "".join(
         chip_filter(f"dim_{d['id']}", d["nome"],
                     [(v["id"], v["nome"]) for v in valores_por_dim.get(d["id"], [])],
-                    dim_sel.get(d["id"], []))
+                    cfg["dim_sel"].get(d["id"], []))
         for d in dimensoes if valores_por_dim.get(d["id"])
     )
 
@@ -1803,7 +1757,7 @@ def relatorios():
     agrupar_opcoes = [("categoria", "Categoria"), ("cartao", "Cartão"), ("mes", "Período (mês)")]
     agrupar_opcoes += [(f"dim_{d['id']}", d["nome"]) for d in dimensoes]
     agrupar_opcoes_html = "".join(
-        f'<option value="{val}" {"selected" if val == agrupar else ""}>{label}</option>'
+        f'<option value="{val}" {"selected" if val == cfg["agrupar"] else ""}>{label}</option>'
         for val, label in agrupar_opcoes
     )
 
@@ -1818,47 +1772,35 @@ def relatorios():
           Por padrão os totais nao incluem pagamento de fatura, juros, tarifas e transferencia interna (nao sao gasto real).
           Selecione uma categoria especifica para incluir esses lancamentos.
         </div>
-        <form method="get" id="formFiltros">
-          <div class="rel-filtros">
-            <select name="agrupar" class="chip-btn" style="border-radius:20px" onchange="this.form.submit()">{agrupar_opcoes_html}</select>
-            {chip_filter('categoria', 'Categoria', [(c, cat_pt(c)) for c in todas_categorias], categorias_sel)}
-            {chip_filter('cartao', 'Cartão', cartao_opcoes, cartoes_sel)}
-            {dims_filtros_html}
-            <div class="rel-datewrap">
-              <input type="date" name="data_ini" value="{data_ini}" onchange="this.form.submit()">
-              <span style="color:#bbb">–</span>
-              <input type="date" name="data_fim" value="{data_fim}" onchange="this.form.submit()">
-            </div>
-            <div class="rel-actions">
-              <a href="/relatorios" class="chip-btn" style="text-decoration:none">Limpar tudo</a>
-            </div>
+        <div class="rel-filtros">
+          <select name="agrupar" id="selAgrupar" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">{agrupar_opcoes_html}</select>
+          {chip_filter('categoria', 'Categoria', [(c, cat_pt(c)) for c in todas_categorias], cfg["categorias_sel"])}
+          {chip_filter('cartao', 'Cartão', cartao_opcoes, cfg["cartoes_sel"])}
+          {dims_filtros_html}
+          <div class="rel-datewrap">
+            <input type="date" name="data_ini" id="inputDataIni" value="{cfg["data_ini"]}" onchange="aplicarFiltros()">
+            <span style="color:#bbb">–</span>
+            <input type="date" name="data_fim" id="inputDataFim" value="{cfg["data_fim"]}" onchange="aplicarFiltros()">
           </div>
-        </form>
+          <div class="rel-actions">
+            <a href="/relatorios" class="chip-btn" style="text-decoration:none">Limpar tudo</a>
+          </div>
+        </div>
 
         <div class="cards">
-          <div class="card"><div class="label">Total no filtro</div><div class="val">{_fmt_moeda(total_geral)}</div></div>
-          <div class="card"><div class="label">Lançamentos</div><div class="val">{qtd_geral}</div></div>
+          <div class="card"><div class="label">Total no filtro</div><div class="val" id="totalGeral">-</div></div>
+          <div class="card"><div class="label">Lançamentos</div><div class="val" id="qtdGeral">-</div></div>
         </div>
 
         <div class="chart-card">
-          <h3>Gráfico ({dict(agrupar_opcoes).get(agrupar, agrupar)})</h3>
+          <h3 id="graficoTitulo">Gráfico</h3>
           <canvas id="chartGrupos" height="90"></canvas>
         </div>
 
         <div class="cat-breakdown">
-          <h3>Totais agrupados</h3>
-          {grupos_html_str}
+          <h3>Totais agrupados <span style="font-weight:400;font-size:12px;color:#999">(clique em um grupo para ver os lançamentos)</span></h3>
+          <div id="gruposCont"><div style="color:#888;padding:10px 0">Carregando...</div></div>
         </div>
-
-        <details class="cat-breakdown" style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">Ver lançamentos ({len(detalhe_rows)}{'​' if len(detalhe_rows) < 500 else '+'})</summary>
-          <div style="padding:0 18px 18px 18px">
-            <table>
-              <thead><tr><th>Data</th><th>Descrição</th><th>Cartão</th><th>Categoria</th><th>Valor</th></tr></thead>
-              <tbody>{detalhe_html}</tbody>
-            </table>
-          </div>
-        </details>
       </div>
 
       <script>
@@ -1866,11 +1808,13 @@ def relatorios():
         function cfToggle(btn) {{
           const panel = btn.nextElementSibling;
           const abrir = !panel.classList.contains('show');
-          document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
+          document.querySelectorAll('.chip-panel.show').forEach(p => {{ if (p !== panel) p.classList.remove('show'); }});
           if (abrir) {{
             panel.classList.add('show');
             const search = panel.querySelector('.chip-search');
             if (search) {{ search.value = ''; cfFiltrar(search); search.focus(); }}
+          }} else {{
+            panel.classList.remove('show');
           }}
         }}
         document.addEventListener('click', function(e) {{
@@ -1878,16 +1822,11 @@ def relatorios():
             document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
           }}
         }});
-        function cfOnChange(input) {{
-          const opt = input.closest('.chip-opt');
-          opt.classList.toggle('chip-checked', input.checked);
-          input.form.submit();
-        }}
         function cfClear(e, btn) {{
           e.stopPropagation();
-          const panel = btn.parentElement.nextElementSibling;
+          const panel = btn.closest('.chipfilter').querySelector('.chip-panel');
           panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
-          btn.form ? btn.form.submit() : document.getElementById('formFiltros').submit();
+          aplicarFiltros();
         }}
         function cfFiltrar(input) {{
           const panel = input.closest('.chip-panel');
@@ -1916,39 +1855,251 @@ def relatorios():
             if (idx >= 0) {{
               const cb = visiveis[idx].querySelector('input[type=checkbox]');
               cb.checked = !cb.checked;
-              cfOnChange(cb);
+              aplicarFiltros();
             }}
           }} else if (e.key === 'Escape') {{
             panel.classList.remove('show');
           }}
         }}
 
-        // ---- grafico dinamico conforme os filtros aplicados ----
-        const chartLabels = {json.dumps(chart_labels)};
-        const chartValores = {json.dumps(chart_valores)};
-        if (window.Chart) {{
-          new Chart(document.getElementById('chartGrupos'), {{
-            type: 'bar',
-            data: {{
-              labels: chartLabels,
-              datasets: [{{
-                label: 'Total (R$)',
-                data: chartValores,
-                backgroundColor: '#2e6fd6',
-                borderRadius: 4,
-                maxBarThickness: 46
-              }}]
-            }},
-            options: {{
-              responsive: true,
-              plugins: {{ legend: {{ display: false }} }},
-              scales: {{ y: {{ beginAtZero: true }} }}
-            }}
+        // ---- filtros aplicados em tempo real via AJAX (o dropdown nao fecha) ----
+        function fmtMoeda(v) {{
+          return 'R$ ' + Number(v).toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+        }}
+        function atualizarChipLabels() {{
+          document.querySelectorAll('.chipfilter').forEach(cf => {{
+            const btn = cf.querySelector('.chip-btn');
+            const label = btn.dataset.label;
+            const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
+            btn.classList.toggle('ativo', n > 0);
+            btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
+              (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
           }});
         }}
+        function coletarQuery() {{
+          const params = new URLSearchParams();
+          params.set('agrupar', document.getElementById('selAgrupar').value);
+          document.querySelectorAll('.chip-opt input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
+          const di = document.getElementById('inputDataIni').value;
+          const df = document.getElementById('inputDataFim').value;
+          if (di) params.set('data_ini', di);
+          if (df) params.set('data_fim', df);
+          return params;
+        }}
+        function aplicarFiltros() {{
+          atualizarChipLabels();
+          const params = coletarQuery();
+          history.replaceState(null, '', '/relatorios?' + params.toString());
+          carregarDados(params);
+        }}
+        function carregarDados(params) {{
+          fetch('/relatorios/dados?' + params.toString()).then(r => r.json()).then(renderResultado);
+        }}
+        function renderResultado(data) {{
+          document.getElementById('totalGeral').textContent = fmtMoeda(data.total_geral);
+          document.getElementById('qtdGeral').textContent = data.qtd_geral;
+          document.getElementById('graficoTitulo').textContent = 'Gráfico (' + data.agrupar_label + ')';
+          renderGrupos(data.grupos);
+          renderChart(data.grupos);
+        }}
+
+        // ---- lista de totais agrupados, clicavel para ver os lancamentos de cada grupo ----
+        window.__grupos = [];
+        function renderGrupos(grupos) {{
+          window.__grupos = grupos;
+          const cont = document.getElementById('gruposCont');
+          if (!grupos.length) {{
+            cont.innerHTML = '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>';
+            return;
+          }}
+          cont.innerHTML = grupos.map((g, i) => (
+            '<div>' +
+              '<div class="rel-grupo-row" style="cursor:pointer" onclick="toggleGrupoDetalhe(' + i + ')">' +
+                '<div style="flex:1">' +
+                  '<div style="display:flex;justify-content:space-between">' +
+                    '<span>' + g.nome + ' <span style="color:#aaa">(' + g.qtd + ')</span></span>' +
+                    '<span><strong>' + fmtMoeda(g.total) + '</strong> <span style="color:#aaa">' + g.pct + '%</span></span>' +
+                  '</div>' +
+                  '<div class="barra"><div style="width:' + Math.max(g.pct, 0) + '%"></div></div>' +
+                '</div>' +
+              '</div>' +
+              '<div class="rel-grupo-detalhe" id="grupoDetalhe' + i + '" style="display:none"></div>' +
+            '</div>'
+          )).join('');
+        }}
+        function toggleGrupoDetalhe(i) {{
+          const el = document.getElementById('grupoDetalhe' + i);
+          const abrir = el.style.display === 'none';
+          document.querySelectorAll('.rel-grupo-detalhe').forEach(d => {{ if (d !== el) d.style.display = 'none'; }});
+          if (!abrir) {{ el.style.display = 'none'; return; }}
+          el.style.display = 'block';
+          if (el.dataset.loaded === '1') return;
+          el.innerHTML = '<div style="padding:10px;color:#888;font-size:13px">Carregando...</div>';
+          const g = window.__grupos[i];
+          const params = coletarQuery();
+          if (g.valor === null || g.valor === undefined) {{ params.set('valor_none', '1'); }}
+          else {{ params.set('valor', g.valor); }}
+          fetch('/relatorios/lancamentos?' + params.toString())
+            .then(r => r.json())
+            .then(data => {{
+              el.dataset.loaded = '1';
+              if (!data.lancamentos.length) {{
+                el.innerHTML = '<div style="padding:10px;color:#888;font-size:13px">Nenhum lancamento.</div>';
+                return;
+              }}
+              el.innerHTML = '<table class="rel-mini-table"><thead><tr><th>Data</th><th>Descrição</th><th>Cartão</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' +
+                data.lancamentos.map(l => (
+                  '<tr><td>' + l.data + '</td><td>' + l.descricao + '</td><td>' + l.cartao + '</td><td>' + l.categoria + '</td>' +
+                  '<td class="valor">' + fmtMoeda(l.valor) + '</td></tr>'
+                )).join('') +
+                '</tbody></table>' +
+                (data.total >= 300 ? '<div style="padding:8px 10px;color:#999;font-size:12px">Mostrando os 300 lancamentos mais recentes deste grupo.</div>' : '');
+            }});
+        }}
+
+        // ---- grafico dinamico conforme os filtros aplicados ----
+        let chartInstance = null;
+        function renderChart(grupos) {{
+          const labels = grupos.map(g => g.nome);
+          const valores = grupos.map(g => g.total);
+          if (!window.Chart) return;
+          if (chartInstance) {{
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = valores;
+            chartInstance.update();
+          }} else {{
+            chartInstance = new Chart(document.getElementById('chartGrupos'), {{
+              type: 'bar',
+              data: {{ labels: labels, datasets: [{{ label: 'Total (R$)', data: valores, backgroundColor: '#2e6fd6', borderRadius: 4, maxBarThickness: 46 }}] }},
+              options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }}, scales: {{ y: {{ beginAtZero: true }} }} }}
+            }});
+          }}
+        }}
+
+        document.addEventListener('DOMContentLoaded', function() {{
+          carregarDados(new URLSearchParams(window.location.search));
+        }});
       </script>
     </body></html>
     """
+
+
+@app.route("/relatorios/dados")
+@login_required
+def relatorios_dados():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+    cfg = _montar_filtro_relatorio(dimensoes)
+
+    cur.execute(
+        f"SELECT {cfg['group_expr']} AS grupo, COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
+        f"FROM cartao.transacao t {cfg['join_extra']} WHERE {cfg['where_sql']} GROUP BY {cfg['group_expr']} ORDER BY total DESC;",
+        cfg["params"],
+    )
+    grupos_raw = cur.fetchall()
+
+    cur.execute(
+        f"SELECT COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
+        f"FROM cartao.transacao t WHERE {cfg['where_sql']};",
+        cfg["params"],
+    )
+    totalizador = cur.fetchone()
+    total_geral = float(totalizador["total"] or 0)
+    qtd_geral = totalizador["qtd"] or 0
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
+    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+
+    cur.close()
+    conn.close()
+
+    def nome_grupo(g):
+        if cfg["agrupar"] == "categoria":
+            return cat_pt(g)
+        if cfg["agrupar"] == "cartao":
+            if not g:
+                return "(sem cartao)"
+            prefixo = nomes_cartao.get(g)
+            return f"{prefixo} - final {g}" if prefixo else f"final {g}"
+        return g if g else "(nao definido)"
+
+    grupos = []
+    for g in grupos_raw:
+        total_g = float(g["total"] or 0)
+        pct = (total_g / total_geral * 100) if total_geral else 0
+        grupos.append({
+            "valor": g["grupo"],
+            "nome": nome_grupo(g["grupo"]),
+            "qtd": g["qtd"],
+            "total": round(total_g, 2),
+            "pct": round(pct, 1),
+        })
+
+    agrupar_labels = {"categoria": "Categoria", "cartao": "Cartão", "mes": "Período (mês)"}
+    for d in dimensoes:
+        agrupar_labels[f"dim_{d['id']}"] = d["nome"]
+
+    return jsonify({
+        "total_geral": round(total_geral, 2),
+        "qtd_geral": qtd_geral,
+        "agrupar": cfg["agrupar"],
+        "agrupar_label": agrupar_labels.get(cfg["agrupar"], cfg["agrupar"]),
+        "grupos": grupos,
+    })
+
+
+@app.route("/relatorios/lancamentos")
+@login_required
+def relatorios_lancamentos():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
+    dimensoes = cur.fetchall()
+    cfg = _montar_filtro_relatorio(dimensoes)
+
+    where_sql = cfg["where_sql"]
+    params = list(cfg["params"])
+    if request.args.get("valor_none") == "1":
+        where_sql += f" AND {cfg['group_expr']} IS NULL"
+    elif request.args.get("valor") is not None:
+        where_sql += f" AND {cfg['group_expr']} = %s"
+        params.append(request.args.get("valor"))
+
+    cur.execute(
+        f"SELECT t.data_transacao, t.descricao, t.categoria, COALESCE(t.valor_brl, t.valor_original) AS valor, "
+        f"t.numero_cartao_final FROM cartao.transacao t {cfg['join_extra']} WHERE {where_sql} "
+        f"ORDER BY t.data_transacao DESC LIMIT 300;",
+        params,
+    )
+    rows = cur.fetchall()
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
+    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+
+    cur.close()
+    conn.close()
+
+    def nome_cartao_curto(final4):
+        if not final4:
+            return "-"
+        prefixo = nomes_cartao.get(final4)
+        return prefixo if prefixo else f"final {final4}"
+
+    lancamentos = [
+        {
+            "data": (r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y"),
+            "descricao": r["descricao"],
+            "cartao": nome_cartao_curto(r["numero_cartao_final"]),
+            "categoria": cat_pt(r["categoria"]),
+            "valor": float(r["valor"] or 0),
+        }
+        for r in rows
+    ]
+    return jsonify({"lancamentos": lancamentos, "total": len(lancamentos)})
 
 
 @app.route("/health")
