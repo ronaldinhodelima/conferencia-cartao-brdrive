@@ -79,12 +79,31 @@ FATURA_DIA_FECHAMENTO = 12
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
 
+# nomes de banco reconhecidos dentro do nome da conta/instituicao retornado pelo Pluggy
+# (o connector_name do Pluggy costuma ser generico, ex: "MeuPluggy", entao preferimos
+# procurar o nome real do banco dentro do nome da conta/instituicao)
+BANCOS_CONHECIDOS = (
+    "Unicred", "Nubank", "Itaú", "Itau", "Bradesco", "Santander", "Caixa",
+    "Banco do Brasil", "Inter", "C6 Bank", "C6", "PicPay", "Mercado Pago",
+    "BTG", "XP", "Sicoob", "Sicredi", "Original", "Neon", "Next", "Will Bank",
+)
+
+
+def detectar_banco(nome_conta, connector_name):
+    texto = f"{nome_conta or ''} {connector_name or ''}".upper()
+    for banco in BANCOS_CONHECIDOS:
+        if banco.upper() in texto:
+            return banco
+    return connector_name or nome_conta or "Banco"
+
+
 def origem_label(tipo, connector_name, nome_conta):
-    """Rotulo amigavel de origem a partir do tipo da conta + nome do conector Pluggy."""
+    """Rotulo amigavel de origem a partir do tipo da conta + nome do banco detectado."""
+    banco = detectar_banco(nome_conta, connector_name)
     if tipo == "CREDIT":
-        return f"Cartão de Crédito {connector_name}"
+        return f"Cartão de Crédito {banco}"
     if tipo == "BANK":
-        return f"Conta Corrente {connector_name}"
+        return f"Conta Corrente {banco}"
     if tipo == "MANUAL":
         return "Dinheiro (manual)"
     return nome_conta or "Outra origem"
