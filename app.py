@@ -472,10 +472,15 @@ def topbar_html(titulo, ativo=None):
         </div>
       </div>
       <script>
+        function syncEhSucesso(status) {{
+          if (!status) return false;
+          const s = String(status).toLowerCase();
+          return s === 'ok' || s === 'success' || s === 'sucesso';
+        }}
         function syncFormatarTexto(d) {{
           if (!d.executado_em) return 'Sem sincronização registrada';
           let txt = 'Atualizado em ' + d.executado_em;
-          if (d.status && d.status !== 'ok') txt += ' (erro)';
+          if (d.status && !syncEhSucesso(d.status)) txt += ' (erro)';
           return txt;
         }}
         async function syncCarregarStatus() {{
@@ -484,7 +489,7 @@ def topbar_html(titulo, ativo=None):
             const d = await r.json();
             document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
             const dot = document.getElementById('syncDot');
-            dot.className = 'sync-dot ' + (d.status === 'ok' ? 'ok' : (d.status ? 'erro' : ''));
+            dot.className = 'sync-dot ' + (syncEhSucesso(d.status) ? 'ok' : (d.status ? 'erro' : ''));
           }} catch (e) {{
             document.getElementById('syncTexto').textContent = 'Status indisponível';
           }}
@@ -500,7 +505,7 @@ def topbar_html(titulo, ativo=None):
             const r = await fetch('/api/sync-agora', {{ method: 'POST' }});
             const d = await r.json();
             document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
-            dot.className = 'sync-dot ' + (d.status === 'ok' ? 'ok' : 'erro');
+            dot.className = 'sync-dot ' + (syncEhSucesso(d.status) ? 'ok' : 'erro');
           }} catch (e) {{
             document.getElementById('syncTexto').textContent = 'Falha ao atualizar';
             dot.className = 'sync-dot erro';
