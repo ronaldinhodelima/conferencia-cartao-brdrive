@@ -98,7 +98,7 @@ def detectar_banco(nome_conta, connector_name):
 
 
 def origem_label(tipo, connector_name, nome_conta):
-    """Rotulo amigavel de origem a partir do tipo da conta + nome do banco detectado."""
+    """Rotulo amigavel (completo) de origem a partir do tipo da conta + nome do banco detectado."""
     banco = detectar_banco(nome_conta, connector_name)
     if tipo == "CREDIT":
         return f"Cartão de Crédito {banco}"
@@ -107,6 +107,81 @@ def origem_label(tipo, connector_name, nome_conta):
     if tipo == "MANUAL":
         return "Dinheiro (manual)"
     return nome_conta or "Outra origem"
+
+
+def origem_label_curto(tipo, connector_name, nome_conta):
+    """Versao abreviada do rotulo de origem (ex: 'CC Unicred'), usada na UI com tooltip."""
+    banco = detectar_banco(nome_conta, connector_name)
+    if tipo == "CREDIT":
+        return f"Cartão {banco}"
+    if tipo == "BANK":
+        return f"CC {banco}"
+    if tipo == "MANUAL":
+        return "Dinheiro"
+    return nome_conta or "Outra"
+
+
+def carregar_origens(cur):
+    """Le todas as contas (Pluggy + manual) e devolve estruturas prontas de origem.
+
+    O nome do banco costuma so aparecer no nome de UMA das contas da conexao (ex: a conta
+    corrente traz a razao social do banco, o cartao traz so 'Cartao de credito'). Por isso
+    detectamos o banco olhando todas as contas da conexao (item_id) e aplicamos para todas.
+    """
+    cur.execute(
+        "SELECT c.account_id, c.item_id, c.tipo, c.nome, c.numero_final, p.connector_name "
+        "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
+        "ORDER BY c.tipo, p.connector_name;"
+    )
+    contas = cur.fetchall()
+
+    banco_por_item = {}
+    for c in contas:
+        banco = detectar_banco(c["nome"], c["connector_name"])
+        if banco != (c["connector_name"] or c["nome"] or "Banco"):
+            banco_por_item.setdefault(c["item_id"], banco)
+
+    contas_by_id = {}
+    opcoes = []
+    for c in contas:
+        banco = banco_por_item.get(c["item_id"], c["connector_name"])
+        completo = origem_label(c["tipo"], banco, c["nome"])
+        curto = origem_label_curto(c["tipo"], banco, c["nome"])
+        aid = str(c["account_id"])
+        contas_by_id[aid] = {**c, "banco": banco, "label": completo, "label_curto": curto}
+        opcoes.append((aid, curto, completo))
+    return contas_by_id, opcoes
+
+
+def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()"):
+    """Filtro em chip com dropdown, busca e multi-selecao.
+
+    opcoes: lista de (value, texto) ou (value, texto_curto, texto_completo).
+    """
+    n_sel = len(selecionados)
+    partes = []
+    for opt in opcoes:
+        val, texto = opt[0], opt[1]
+        titulo = opt[2] if len(opt) > 2 else texto
+        marcado = "checked" if str(val) in selecionados else ""
+        partes.append(
+            f'<label class="chip-opt" title="{titulo}">'
+            f'<input type="checkbox" name="{nome}" value="{val}" {marcado} '
+            f'onchange="{onchange}"> {texto}</label>'
+        )
+    opts_html = "".join(partes)
+    return f"""
+    <div class="chipfilter">
+      <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
+        <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
+        {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
+      </button>
+      <div class="chip-panel">
+        <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
+        <div class="chip-list">{opts_html}</div>
+      </div>
+    </div>
+    """
 
 
 def proxima_ocorrencia_dia(dia):
@@ -478,6 +553,35 @@ BASE_CSS = """
   .status { font-size: 11px; color: var(--good); margin-left: 6px; opacity: 0; transition: opacity .3s; font-weight: 500; }
   .status.show { opacity: 1; }
 
+  /* ---------- tabela compacta de lancamentos ---------- */
+  table.compacta { table-layout: fixed; font-size: 12.5px; }
+  table.compacta th { padding: 8px 8px; font-size: 10px; }
+  table.compacta td { padding: 5px 8px; font-size: 12.5px; }
+  table.compacta .cel-data { width: 78px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.25; }
+  table.compacta .cel-desc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.compacta .cel-origem { width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-size: 11.5px; }
+  table.compacta .cel-valor { width: 96px; }
+  table.compacta .cel-check { width: 42px; text-align: center; }
+  table.compacta .cel-obs { width: 130px; }
+  table.compacta .cel-status { width: 44px; }
+  table.compacta .cel-dim { width: 116px; }
+  table.compacta select { width: 100%; max-width: 100%; padding: 4px 5px; font-size: 11.5px; border-radius: 5px; }
+  table.compacta .obs-input { padding: 4px 6px; font-size: 11.5px; }
+  table.compacta input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); }
+
+  /* ---------- chips dos filtros selecionados ---------- */
+  .chips-sel { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip-tag {
+    display: inline-flex; align-items: center; gap: 5px; background: var(--accent-soft); color: var(--accent);
+    border: 1px solid #d5e0fa; border-radius: 20px; padding: 3px 8px; font-size: 11.5px; font-weight: 500; max-width: 190px;
+  }
+  .chip-tag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip-tag b { cursor: pointer; font-weight: 700; opacity: .65; }
+  .chip-tag b:hover { opacity: 1; }
+
+  .btn-perigo { background: var(--bad); color: #fff; border: none; padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500; }
+  .btn-perigo:hover { opacity: .88; }
+
   /* ---------- login ---------- */
   .login-box { max-width: 340px; margin: 100px auto; background: var(--surface); padding: 32px; border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow-2); }
   .login-box h2 { font-size: 19px; letter-spacing: -0.01em; margin: 0 0 18px 0; }
@@ -727,29 +831,7 @@ def index():
     aplicar_regras(cur)
     conn.commit()
 
-    # origens disponiveis (uma por conta sincronizada via Pluggy + a conta manual de dinheiro)
-    cur.execute(
-        "SELECT c.account_id, c.item_id, c.tipo, c.nome, c.numero_final, p.connector_name "
-        "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
-        "ORDER BY c.tipo, p.connector_name;"
-    )
-    contas_todas = cur.fetchall()
-    # o nome do banco costuma so aparecer no nome de UMA das contas da conexao (ex: a conta
-    # corrente traz a razao social do banco, o cartao traz so "Cartao de credito"). Detecta
-    # o banco de cada conexao (item_id) olhando todas as contas dela, e aplica para todas.
-    banco_por_item = {}
-    for c in contas_todas:
-        banco = detectar_banco(c["nome"], c["connector_name"])
-        if banco != (c["connector_name"] or c["nome"] or "Banco"):
-            banco_por_item.setdefault(c["item_id"], banco)
-    origem_opcoes = [
-        (str(c["account_id"]), origem_label(c["tipo"], banco_por_item.get(c["item_id"], c["connector_name"]), c["nome"]))
-        for c in contas_todas
-    ]
-    contas_by_id = {
-        str(c["account_id"]): {**c, "connector_name": banco_por_item.get(c["item_id"], c["connector_name"])}
-        for c in contas_todas
-    }
+    contas_by_id, origem_opcoes = carregar_origens(cur)
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
@@ -831,31 +913,29 @@ def index():
     cur.close()
     conn.close()
 
-    def nome_cartao(final4):
-        if not final4:
-            return "-"
-        prefixo = nomes_cartao.get(final4)
-        return f"{prefixo} - final {final4}" if prefixo else f"final {final4}"
-
     def nome_cartao_curto(final4):
         if not final4:
             return "-"
         prefixo = nomes_cartao.get(final4)
         return prefixo if prefixo else f"final {final4}"
 
-    def origem_curta(account_id):
+    def origem_curta(account_id, final4=None):
         c = contas_by_id.get(str(account_id))
         if not c:
             return "-"
-        if c["tipo"] == "CREDIT":
-            return nome_cartao_curto(c["numero_final"])
-        return origem_label(c["tipo"], c["connector_name"], c["nome"])
+        # no cartao de credito o apelido do cartao (ex: "Andrea físico") diz mais
+        # que "Cartão Unicred", entao usamos ele quando existir
+        if c["tipo"] == "CREDIT" and final4 and nomes_cartao.get(final4):
+            return nomes_cartao[final4]
+        return c["label_curto"]
 
-    def origem_completa(account_id):
+    def origem_completa(account_id, final4=None):
         c = contas_by_id.get(str(account_id))
         if not c:
             return "-"
-        return origem_label(c["tipo"], c["connector_name"], c["nome"])
+        if c["tipo"] == "CREDIT" and final4:
+            return f'{c["label"]} - {nome_cartao_curto(final4)}'
+        return c["label"]
 
     dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
     proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
@@ -881,16 +961,19 @@ def index():
         dup_checked = "checked" if r["duplicada"] else ""
         classes = " ".join(c for c in ["conferida" if r["conferida"] else "", "duplicada" if r["duplicada"] else ""] if c)
         data_local = r["data_transacao"] - timedelta(hours=3)
-        data_fmt = data_local.strftime("%d/%m/%Y %H:%M")
+        data_fmt = data_local.strftime("%d/%m/%y<br>%H:%M")
+        data_fmt_full = data_local.strftime("%d/%m/%Y %H:%M")
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
+        desc = r["descricao"] or ""
 
         conta_info = contas_by_id.get(str(r["account_id"]))
+        eh_manual = conta_info and conta_info["tipo"] == "MANUAL"
         eh_nao_credito = conta_info and conta_info["tipo"] != "CREDIT"
-        # cartao de credito: mantem exibicao tradicional (sem sinal). conta corrente/manual: sinaliza entrada/saida
+        # cartao de credito: exibicao tradicional (sem sinal). conta corrente/manual: entrada/saida
         if eh_nao_credito:
             sinal = "-" if r["tipo"] == "DEBIT" else "+"
-            cor_valor = "color:#c0392b" if r["tipo"] == "DEBIT" else "color:#1a7a3c"
+            cor_valor = "color:#c23c34" if r["tipo"] == "DEBIT" else "color:#1f8a53"
             valor_fmt = f'{sinal} R$ {abs(r["valor"]):,.2f}'
         else:
             cor_valor = ""
@@ -901,9 +984,9 @@ def index():
         for d in dimensoes:
             valor_sel = mapa_dim_transacao.get((str(rid), d["id"]))
             faltando = d["obrigatoria"] and not valor_sel
-            estilo = ' style="border-color:#c0392b;background:#fff5f5"' if faltando else ""
+            estilo = ' style="border-color:#c23c34;background:#fbeceb"' if faltando else ""
             dim_tds.append(
-                f'<td><select class="dim-select" data-dim="{d["id"]}"{estilo} '
+                f'<td class="cel-dim"><select class="dim-select" data-dim="{d["id"]}"{estilo} '
                 f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
             )
             nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
@@ -911,31 +994,32 @@ def index():
 
         trs.append(
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
-            f'<td>{data_fmt}</td>'
-            f'<td>{r["descricao"]}</td>'
-            f'<td class="cartao-cell" title="{origem_completa(r["account_id"])}">{origem_curta(r["account_id"])}</td>'
-            f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
+            f'<td class="cel-data" title="{data_fmt_full}">{data_fmt}</td>'
+            f'<td class="cel-desc" title="{desc}">{desc}</td>'
+            f'<td class="cel-origem" title="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
+            f'<td class="cel-dim"><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
-            f'<td class="valor" style="{cor_valor}">{valor_fmt}</td>'
-            f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
-            f'<td><span class="status" id="status-{rid}">salvo</span></td>'
+            f'<td class="valor cel-valor" style="{cor_valor}">{valor_fmt}</td>'
+            f'<td class="cel-obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..." onblur="salvar(\'{rid}\', this)"></td>'
+            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
+            f'<td class="cel-check"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
+            f'<td class="cel-status"><span class="status" id="status-{rid}">ok</span></td>'
             f'</tr>'
         )
         detalhes = {
-            "data": data_fmt,
-            "descricao": r["descricao"],
+            "data": data_fmt_full,
+            "descricao": desc,
             "categoria": cat_pt(r["categoria"]),
             "valor": valor_fmt,
             "valor_original": f'{r["valor_original"]:,.2f} {r["moeda_original"] or ""}' if r["valor_original"] is not None else "-",
             "status": r["status"] or "-",
             "tipo": r["tipo"] or "-",
-            "origem": origem_completa(r["account_id"]),
+            "origem": origem_completa(r["account_id"], r["numero_cartao_final"]),
             "parcela": f'{r["parcela_atual"]}/{r["parcela_total"]}' if r["parcela_total"] and r["parcela_total"] > 1 else "À vista",
             "conferida": "Sim" if r["conferida"] else "Não",
             "conferida_por": r["conferida_por"] or "-",
             "observacao": r["observacao"] or "-",
+            "_manual": bool(eh_manual),
         }
         detalhes.update(dim_detalhes)
         detalhes_js[str(rid)] = detalhes
@@ -945,77 +1029,53 @@ def index():
     gasto_real = resumo["gasto_real"] or 0
     colspan_total = 9 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th>{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
+    dim_headers = "".join(f'<th class="cel-dim">{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
         for c in por_categoria
     ) or '<div class="cat-row"><span>Sem dados</span></div>'
 
-    def chip_filter(nome, label, opcoes, selecionados):
-        n_sel = len(selecionados)
-        opts_html = "".join(
-            f'<label class="chip-opt">'
-            f'<input type="checkbox" name="{nome}" value="{val}" {"checked" if str(val) in selecionados else ""} '
-            f'onchange="irPara()"> {texto}</label>'
-            for val, texto in opcoes
-        )
-        return f"""
-        <div class="chipfilter">
-          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
-            <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
-            {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
-          </button>
-          <div class="chip-panel">
-            <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
-            <div class="chip-list">{opts_html}</div>
-          </div>
-        </div>
-        """
-
-    origem_filtro_html = chip_filter("origem", "Origem", origem_opcoes, origem_sel)
-
+    origem_filtro_html = chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()")
     categoria_options_manual = "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in categorias)
-    origem_options_manual = "".join(
-        f'<option value="{val}">{texto}</option>' for val, texto in origem_opcoes
-    )
 
     return f"""
     <html><head><title>Conferencia de Cartao</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Conferência de Cartão', 'inicio')}
       <div class="wrap">
-        <div class="filters" style="flex-wrap:wrap">
+        <div class="filters" style="flex-wrap:wrap;gap:14px">
           <div>
             <label>Mes</label>
-            <input type="month" id="mesInput" value="{mes}" onchange="irPara()">
+            <input type="month" id="mesInput" value="{mes}" onchange="aplicarFiltros()">
           </div>
           <div>
             <label>Status</label>
-            <select id="statusInput" onchange="irPara()">
+            <select id="statusInput" onchange="aplicarFiltros()">
               <option value="todas" {"selected" if status=="todas" else ""}>Todas</option>
               <option value="pendente" {"selected" if status=="pendente" else ""}>Pendentes</option>
               <option value="conferida" {"selected" if status=="conferida" else ""}>Conferidas</option>
             </select>
           </div>
           {origem_filtro_html}
+          <div class="chips-sel" id="chipsSel"></div>
           <div style="margin-left:auto">
-            <button type="button" onclick="toggleFormManual()" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer;font-size:13px">+ Lançamento manual</button>
+            <button type="button" onclick="toggleFormManual()">+ Lançamento manual</button>
           </div>
         </div>
 
         <div id="formManual" class="cat-breakdown" style="display:none">
           <h3>Novo lançamento manual (dinheiro)</h3>
           <form onsubmit="return salvarManual(event)" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="date" id="manualData" required value="{datetime.now().strftime('%Y-%m-%d')}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
-            <input type="text" id="manualDescricao" placeholder="Descrição" required style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;flex:1;min-width:160px">
-            <select id="manualDirecao" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+            <input type="date" id="manualData" required value="{datetime.now().strftime('%Y-%m-%d')}" style="padding:7px 9px;border:1px solid var(--line);border-radius:6px">
+            <input type="text" id="manualDescricao" placeholder="Descrição" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;flex:1;min-width:160px">
+            <select id="manualDirecao" style="padding:7px 9px">
               <option value="saida">Saída</option>
               <option value="entrada">Entrada</option>
             </select>
-            <input type="number" id="manualValor" step="0.01" min="0.01" placeholder="Valor (R$)" required style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:130px">
-            <select id="manualCategoria" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">{categoria_options_manual}</select>
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Adicionar</button>
+            <input type="number" id="manualValor" step="0.01" min="0.01" placeholder="Valor (R$)" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:130px">
+            <select id="manualCategoria" style="padding:7px 9px">{categoria_options_manual}</select>
+            <button type="submit">Adicionar</button>
             <span id="manualStatus" style="font-size:12px;color:#888"></span>
           </form>
         </div>
@@ -1033,9 +1093,9 @@ def index():
           {cat_rows_html}
         </div>
 
-        <table>
+        <table class="compacta">
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Origem</th><th>Categoria</th>{dim_headers}<th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
+            <th class="cel-data">Data</th><th class="cel-desc">Descricao</th><th class="cel-origem">Origem</th><th class="cel-dim">Categoria</th>{dim_headers}<th class="cel-valor" style="text-align:right">Valor</th><th class="cel-obs">Obs</th><th class="cel-check">Conf</th><th class="cel-check">Dup</th><th class="cel-status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -1046,11 +1106,15 @@ def index():
           <span class="close" onclick="fecharModal()">&times;</span>
           <h3>Detalhes do lançamento</h3>
           <div id="modalBody"></div>
+          <div id="modalAcoes" style="margin-top:16px;display:none">
+            <button type="button" class="btn-perigo" onclick="excluirManual()">Excluir lançamento</button>
+            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais podem ser excluídos.</div>
+          </div>
         </div>
       </div>
 
       <script>
-        // ---- chip filter (origem): dropdown com busca, checkbox toggle e navegacao por teclado ----
+        // ---- chip filter (origem): filtra sem fechar o painel ----
         function cfToggle(btn) {{
           const panel = btn.nextElementSibling;
           const abrir = !panel.classList.contains('show');
@@ -1064,7 +1128,7 @@ def index():
           }}
         }}
         document.addEventListener('click', function(e) {{
-          if (!e.target.closest('.chipfilter')) {{
+          if (!e.target.closest('.chipfilter') && !e.target.closest('.chip-tag')) {{
             document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
           }}
         }});
@@ -1072,7 +1136,7 @@ def index():
           e.stopPropagation();
           const panel = btn.closest('.chipfilter').querySelector('.chip-panel');
           panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
-          irPara();
+          aplicarFiltros();
         }}
         function cfFiltrar(input) {{
           const panel = input.closest('.chip-panel');
@@ -1080,6 +1144,7 @@ def index():
           panel.querySelectorAll('.chip-opt').forEach(opt => {{
             opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
           }});
+          panel.querySelectorAll('.chip-hover').forEach(o => o.classList.remove('chip-hover'));
         }}
         function cfKeydown(e, input) {{
           const panel = input.closest('.chip-panel');
@@ -1100,17 +1165,76 @@ def index():
             if (idx >= 0) {{
               const cb = visiveis[idx].querySelector('input[type=checkbox]');
               cb.checked = !cb.checked;
-              irPara();
+              aplicarFiltros();
             }}
           }} else if (e.key === 'Escape') {{
             panel.classList.remove('show');
           }}
         }}
 
-        const detalhes = {json.dumps(detalhes_js)};
+        function atualizarChipLabels() {{
+          document.querySelectorAll('.chipfilter').forEach(cf => {{
+            const btn = cf.querySelector('.chip-btn');
+            const label = btn.dataset.label;
+            const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
+            btn.classList.toggle('ativo', n > 0);
+            btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
+              (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
+          }});
+          // chips pequenos ao lado mostrando o que esta selecionado
+          const cont = document.getElementById('chipsSel');
+          const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+          cont.innerHTML = marcados.map(cb => {{
+            const lbl = cb.closest('.chip-opt');
+            const curto = lbl.textContent.trim();
+            const completo = lbl.getAttribute('title') || curto;
+            return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
+                   '<b onclick="desmarcarOrigem(\\'' + cb.value + '\\')">&times;</b></span>';
+          }}).join('');
+        }}
+        function desmarcarOrigem(valor) {{
+          const cb = document.querySelector('.chipfilter input[type=checkbox][value="' + valor + '"]');
+          if (cb) {{ cb.checked = false; aplicarFiltros(); }}
+        }}
+
+        // ---- aplica filtros via AJAX: o dropdown continua aberto ----
+        function coletarQuery() {{
+          const params = new URLSearchParams();
+          params.set('mes', document.getElementById('mesInput').value);
+          params.set('status', document.getElementById('statusInput').value);
+          document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
+          return params;
+        }}
+        function aplicarFiltros() {{
+          atualizarChipLabels();
+          const params = coletarQuery();
+          history.replaceState(null, '', '/?' + params.toString());
+          fetch('/?' + params.toString(), {{ headers: {{ 'X-Parcial': '1' }} }})
+            .then(r => r.text())
+            .then(html => {{
+              const doc = new DOMParser().parseFromString(html, 'text/html');
+              const novaTabela = doc.querySelector('table.compacta');
+              const novosCards = doc.querySelector('.cards');
+              const novaCat = doc.querySelector('.cat-breakdown:not(#formManual)');
+              if (novaTabela) document.querySelector('table.compacta').replaceWith(novaTabela);
+              if (novosCards) document.querySelector('.cards').replaceWith(novosCards);
+              const catAtual = document.querySelectorAll('.cat-breakdown');
+              if (novaCat && catAtual.length) {{
+                catAtual[catAtual.length - 1].replaceWith(novaCat);
+              }}
+              const scriptNovo = doc.querySelector('script[data-detalhes]');
+              if (scriptNovo) {{
+                try {{ window.detalhes = JSON.parse(scriptNovo.textContent); }} catch (e) {{}}
+              }}
+            }});
+        }}
+
+        window.detalhes = {json.dumps(detalhes_js)};
+        let idAtualModal = null;
         function verDetalhes(id) {{
-          const d = detalhes[id];
+          const d = window.detalhes[id];
           if (!d) return;
+          idAtualModal = id;
           const labels = {{
             data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
             valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
@@ -1121,29 +1245,33 @@ def index():
             html += '<div class="row"><span>' + labels[k] + '</span><span>' + d[k] + '</span></div>';
           }}
           for (const k in d) {{
-            if (!(k in labels)) {{
+            if (!(k in labels) && k.charAt(0) !== '_') {{
               html += '<div class="row"><span>' + k + '</span><span>' + d[k] + '</span></div>';
             }}
           }}
           document.getElementById('modalBody').innerHTML = html;
+          document.getElementById('modalAcoes').style.display = d._manual ? 'block' : 'none';
           document.getElementById('modalBg').classList.add('show');
         }}
         function fecharModal() {{
           document.getElementById('modalBg').classList.remove('show');
+          idAtualModal = null;
+        }}
+        function excluirManual() {{
+          if (!idAtualModal) return;
+          const d = window.detalhes[idAtualModal] || {{}};
+          if (!confirm('Excluir definitivamente este lançamento manual?\\n\\n' + (d.descricao || '') + '  ' + (d.valor || ''))) return;
+          fetch('/api/lancamento-manual/' + idAtualModal, {{ method: 'DELETE' }})
+            .then(r => r.json())
+            .then(res => {{
+              if (res.ok) {{ fecharModal(); window.location.reload(); }}
+              else alert(res.erro || 'Não foi possível excluir.');
+            }});
         }}
         function linhaClick(e, id) {{
           const tag = e.target.tagName;
           if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
           verDetalhes(id);
-        }}
-        function irPara() {{
-          const mes = document.getElementById('mesInput').value;
-          const status = document.getElementById('statusInput').value;
-          const params = new URLSearchParams();
-          params.set('mes', mes);
-          params.set('status', status);
-          document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
-          window.location = '/?' + params.toString();
         }}
         const DUPLICADA_OBS_PADRAO = {json.dumps(DUPLICADA_OBS_PADRAO)};
         const filaSalvar = {{}};
@@ -1178,13 +1306,12 @@ def index():
               if (d.bloqueada) {{
                 (d.faltando || []).forEach(dimId => {{
                   const sel = tr.querySelector('.dim-select[data-dim="' + dimId + '"]');
-                  if (sel) {{ sel.style.borderColor = '#c0392b'; sel.style.background = '#fff5f5'; }}
+                  if (sel) {{ sel.style.borderColor = '#c23c34'; sel.style.background = '#fbeceb'; }}
                 }});
                 alert('Nao foi possivel confirmar: preencha os campos obrigatorios destacados em vermelho.');
               }}
               const s = document.getElementById('status-' + id);
-              s.classList.add('show');
-              setTimeout(() => s.classList.remove('show'), 1500);
+              if (s) {{ s.classList.add('show'); setTimeout(() => s.classList.remove('show'), 1500); }}
             }}
           }});
           filaSalvar[id] = atual;
@@ -1217,15 +1344,14 @@ def index():
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify(payload)
           }}).then(r => r.json()).then(d => {{
-            if (d.ok) {{
-              window.location.reload();
-            }} else {{
-              statusEl.textContent = d.erro || 'Falha ao salvar';
-            }}
+            if (d.ok) {{ window.location.reload(); }}
+            else {{ statusEl.textContent = d.erro || 'Falha ao salvar'; }}
           }}).catch(() => {{ statusEl.textContent = 'Falha ao salvar'; }});
           return false;
         }}
+        atualizarChipLabels();
       </script>
+      <script type="application/json" data-detalhes>{json.dumps(detalhes_js)}</script>
     </body></html>
     """
 
@@ -1258,6 +1384,41 @@ def lancamento_manual():
                 valor, valor, data_transacao, categoria, tipo,
             ),
         )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "erro": str(e)}), 400
+
+
+@app.route("/api/lancamento-manual/<transacao_id>", methods=["DELETE"])
+@login_required
+def excluir_lancamento_manual(transacao_id):
+    """Exclui um lancamento manual. Transacoes vindas do Pluggy nunca sao apagadas
+    (elas voltariam na proxima sincronizacao, entao so faz sentido apagar as manuais)."""
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT account_id FROM cartao.transacao WHERE transacao_id = %s;",
+            (transacao_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"ok": False, "erro": "Lançamento não encontrado."}), 404
+        if str(row[0]) != CONTA_MANUAL_ID:
+            cur.close()
+            conn.close()
+            return jsonify({
+                "ok": False,
+                "erro": "Só é possível excluir lançamentos manuais. Lançamentos sincronizados do banco voltariam na próxima sincronização — marque como duplicada se quiser ignorá-lo.",
+            }), 400
+
+        cur.execute("DELETE FROM cartao.transacao_dimensao WHERE transacao_id = %s;", (str(transacao_id),))
+        cur.execute("DELETE FROM cartao.transacao WHERE transacao_id = %s;", (transacao_id,))
         conn.commit()
         cur.close()
         conn.close()
@@ -2128,6 +2289,7 @@ def _montar_filtro_relatorio(dimensoes):
     tanto pela pagina quanto pelos endpoints de dados (AJAX)."""
     categorias_sel = request.args.getlist("categoria")
     cartoes_sel = request.args.getlist("cartao")
+    origens_sel = request.args.getlist("origem")
     data_ini = request.args.get("data_ini") or ""
     data_fim = request.args.get("data_fim") or ""
     agrupar = request.args.get("agrupar") or "categoria"
@@ -2150,6 +2312,9 @@ def _montar_filtro_relatorio(dimensoes):
     if cartoes_sel:
         where.append("t.numero_cartao_final IN %s")
         params.append(tuple(cartoes_sel))
+    if origens_sel:
+        where.append("t.account_id IN %s")
+        params.append(tuple(origens_sel))
     if data_ini:
         where.append("t.data_transacao >= %s")
         params.append(data_ini)
@@ -2170,6 +2335,8 @@ def _montar_filtro_relatorio(dimensoes):
         group_expr = "t.categoria"
     elif agrupar == "cartao":
         group_expr = "t.numero_cartao_final"
+    elif agrupar == "origem":
+        group_expr = "t.account_id::text"
     elif agrupar == "mes":
         group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
     elif agrupar.startswith("dim_"):
@@ -2186,6 +2353,7 @@ def _montar_filtro_relatorio(dimensoes):
     return {
         "categorias_sel": categorias_sel,
         "cartoes_sel": cartoes_sel,
+        "origens_sel": origens_sel,
         "data_ini": data_ini,
         "data_fim": data_fim,
         "agrupar": agrupar,
@@ -2223,31 +2391,13 @@ def relatorios():
     cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
     finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
 
+    contas_by_id, origem_opcoes = carregar_origens(cur)
+
     cfg = _montar_filtro_relatorio(dimensoes)
     cur.close()
     conn.close()
 
-    def chip_filter(nome, label, opcoes, selecionados):
-        """opcoes: lista de (value, texto). selecionados: lista de strings (values marcados)."""
-        n_sel = len(selecionados)
-        opts_html = "".join(
-            f'<label class="chip-opt">'
-            f'<input type="checkbox" name="{nome}" value="{val}" {"checked" if str(val) in selecionados else ""} '
-            f'onchange="aplicarFiltros()"> {texto}</label>'
-            for val, texto in opcoes
-        )
-        return f"""
-        <div class="chipfilter">
-          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
-            <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
-            {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
-          </button>
-          <div class="chip-panel">
-            <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
-            <div class="chip-list">{opts_html}</div>
-          </div>
-        </div>
-        """
+    chip_filter = chip_filter_html
 
     dims_filtros_html = "".join(
         chip_filter(f"dim_{d['id']}", d["nome"],
@@ -2260,7 +2410,7 @@ def relatorios():
     registrados = {c["final4"] for c in cartoes_cadastrados}
     cartao_opcoes += [(f, f"final {f}") for f in finais_usados if f not in registrados]
 
-    agrupar_opcoes = [("categoria", "Categoria"), ("cartao", "Cartão"), ("mes", "Período (mês)")]
+    agrupar_opcoes = [("categoria", "Categoria"), ("origem", "Origem"), ("cartao", "Cartão"), ("mes", "Período (mês)")]
     agrupar_opcoes += [(f"dim_{d['id']}", d["nome"]) for d in dimensoes]
     agrupar_opcoes_html = "".join(
         f'<option value="{val}" {"selected" if val == cfg["agrupar"] else ""}>{label}</option>'
@@ -2280,6 +2430,7 @@ def relatorios():
         </div>
         <div class="rel-filtros">
           <select name="agrupar" id="selAgrupar" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">{agrupar_opcoes_html}</select>
+          {chip_filter('origem', 'Origem', origem_opcoes, cfg["origens_sel"])}
           {chip_filter('categoria', 'Categoria', [(c, cat_pt(c)) for c in todas_categorias], cfg["categorias_sel"])}
           {chip_filter('cartao', 'Cartão', cartao_opcoes, cfg["cartoes_sel"])}
           {dims_filtros_html}
@@ -2292,6 +2443,7 @@ def relatorios():
             <a href="/relatorios" class="chip-btn" style="text-decoration:none">Limpar tudo</a>
           </div>
         </div>
+        <div class="chips-sel" id="chipsSel" style="margin:-6px 0 14px 0"></div>
 
         <div class="cards">
           <div class="card"><div class="label">Total no filtro</div><div class="val" id="totalGeral">-</div></div>
@@ -2381,6 +2533,22 @@ def relatorios():
             btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
               (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
           }});
+          // chips pequenos mostrando tudo que esta selecionado
+          const cont = document.getElementById('chipsSel');
+          if (cont) {{
+            const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+            cont.innerHTML = marcados.map(cb => {{
+              const lbl = cb.closest('.chip-opt');
+              const curto = lbl.textContent.trim();
+              const completo = lbl.getAttribute('title') || curto;
+              return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
+                     '<b onclick="desmarcarFiltro(\\'' + cb.name + '\\', \\'' + cb.value + '\\')">&times;</b></span>';
+            }}).join('');
+          }}
+        }}
+        function desmarcarFiltro(nome, valor) {{
+          const cb = document.querySelector('.chipfilter input[name="' + nome + '"][value="' + valor + '"]');
+          if (cb) {{ cb.checked = false; aplicarFiltros(); }}
         }}
         function coletarQuery() {{
           const params = new URLSearchParams();
@@ -2453,9 +2621,10 @@ def relatorios():
                 el.innerHTML = '<div style="padding:10px;color:#888;font-size:13px">Nenhum lancamento.</div>';
                 return;
               }}
-              el.innerHTML = '<table class="rel-mini-table"><thead><tr><th>Data</th><th>Descrição</th><th>Cartão</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' +
+              el.innerHTML = '<table class="rel-mini-table"><thead><tr><th>Data</th><th>Descrição</th><th>Origem</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' +
                 data.lancamentos.map(l => (
-                  '<tr><td>' + l.data + '</td><td>' + l.descricao + '</td><td>' + l.cartao + '</td><td>' + l.categoria + '</td>' +
+                  '<tr><td>' + l.data + '</td><td>' + l.descricao + '</td>' +
+                  '<td title="' + (l.origem_completa || '') + '">' + l.origem + '</td><td>' + l.categoria + '</td>' +
                   '<td class="valor">' + fmtMoeda(l.valor) + '</td></tr>'
                 )).join('') +
                 '</tbody></table>' +
@@ -2519,6 +2688,8 @@ def relatorios_dados():
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
     nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
 
+    contas_by_id, _ = carregar_origens(cur)
+
     cur.close()
     conn.close()
 
@@ -2530,6 +2701,9 @@ def relatorios_dados():
                 return "(sem cartao)"
             prefixo = nomes_cartao.get(g)
             return f"{prefixo} - final {g}" if prefixo else f"final {g}"
+        if cfg["agrupar"] == "origem":
+            c = contas_by_id.get(str(g))
+            return c["label"] if c else "(sem origem)"
         return g if g else "(nao definido)"
 
     grupos = []
@@ -2544,7 +2718,7 @@ def relatorios_dados():
             "pct": round(pct, 1),
         })
 
-    agrupar_labels = {"categoria": "Categoria", "cartao": "Cartão", "mes": "Período (mês)"}
+    agrupar_labels = {"categoria": "Categoria", "origem": "Origem", "cartao": "Cartão", "mes": "Período (mês)"}
     for d in dimensoes:
         agrupar_labels[f"dim_{d['id']}"] = d["nome"]
 
@@ -2577,7 +2751,7 @@ def relatorios_lancamentos():
 
     cur.execute(
         f"SELECT t.data_transacao, t.descricao, t.categoria, COALESCE(t.valor_brl, t.valor_original) AS valor, "
-        f"t.numero_cartao_final FROM cartao.transacao t {cfg['join_extra']} WHERE {where_sql} "
+        f"t.numero_cartao_final, t.account_id FROM cartao.transacao t {cfg['join_extra']} WHERE {where_sql} "
         f"ORDER BY t.data_transacao DESC LIMIT 300;",
         params,
     )
@@ -2585,6 +2759,8 @@ def relatorios_lancamentos():
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
     nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+
+    contas_by_id, _ = carregar_origens(cur)
 
     cur.close()
     conn.close()
@@ -2595,16 +2771,27 @@ def relatorios_lancamentos():
         prefixo = nomes_cartao.get(final4)
         return prefixo if prefixo else f"final {final4}"
 
-    lancamentos = [
-        {
+    def origem_de(r):
+        c = contas_by_id.get(str(r["account_id"]))
+        if not c:
+            return "-", "-"
+        # se for cartao de credito e tiver apelido cadastrado, o apelido e mais informativo
+        if c["tipo"] == "CREDIT" and r["numero_cartao_final"] and nomes_cartao.get(r["numero_cartao_final"]):
+            return nomes_cartao[r["numero_cartao_final"]], f'{c["label"]} - {nome_cartao_curto(r["numero_cartao_final"])}'
+        return c["label_curto"], c["label"]
+
+    lancamentos = []
+    for r in rows:
+        curto, completo = origem_de(r)
+        lancamentos.append({
             "data": (r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y"),
             "descricao": r["descricao"],
+            "origem": curto,
+            "origem_completa": completo,
             "cartao": nome_cartao_curto(r["numero_cartao_final"]),
             "categoria": cat_pt(r["categoria"]),
             "valor": float(r["valor"] or 0),
-        }
-        for r in rows
-    ]
+        })
     return jsonify({"lancamentos": lancamentos, "total": len(lancamentos)})
 
 
