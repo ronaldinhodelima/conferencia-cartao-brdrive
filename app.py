@@ -729,16 +729,27 @@ def index():
 
     # origens disponiveis (uma por conta sincronizada via Pluggy + a conta manual de dinheiro)
     cur.execute(
-        "SELECT c.account_id, c.tipo, c.nome, c.numero_final, p.connector_name "
+        "SELECT c.account_id, c.item_id, c.tipo, c.nome, c.numero_final, p.connector_name "
         "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
         "ORDER BY c.tipo, p.connector_name;"
     )
     contas_todas = cur.fetchall()
+    # o nome do banco costuma so aparecer no nome de UMA das contas da conexao (ex: a conta
+    # corrente traz a razao social do banco, o cartao traz so "Cartao de credito"). Detecta
+    # o banco de cada conexao (item_id) olhando todas as contas dela, e aplica para todas.
+    banco_por_item = {}
+    for c in contas_todas:
+        banco = detectar_banco(c["nome"], c["connector_name"])
+        if banco != (c["connector_name"] or c["nome"] or "Banco"):
+            banco_por_item.setdefault(c["item_id"], banco)
     origem_opcoes = [
-        (str(c["account_id"]), origem_label(c["tipo"], c["connector_name"], c["nome"]))
+        (str(c["account_id"]), origem_label(c["tipo"], banco_por_item.get(c["item_id"], c["connector_name"]), c["nome"]))
         for c in contas_todas
     ]
-    contas_by_id = {str(c["account_id"]): c for c in contas_todas}
+    contas_by_id = {
+        str(c["account_id"]): {**c, "connector_name": banco_por_item.get(c["item_id"], c["connector_name"])}
+        for c in contas_todas
+    }
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
