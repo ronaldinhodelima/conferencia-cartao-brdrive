@@ -597,13 +597,29 @@ BASE_CSS = """
   .summary { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; }
 
   /* ---------- summary cards ---------- */
-  .cards { display: flex; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; flex: 1; min-width: 150px; }
-  .card .label { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
-  .card .val { font-size: 23px; font-weight: 650; margin-top: 6px; letter-spacing: -0.015em; }
+  .cards { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; align-items: stretch; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 15px; flex: 1 1 0; min-width: 0; }
+  .card .label {
+    font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .03em; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card .val { font-size: 21px; font-weight: 650; margin-top: 5px; letter-spacing: -0.015em; white-space: nowrap; }
+  .card .sub { font-size: 11px; color: var(--ink-faint); margin-top: 3px; white-space: nowrap; }
 
   .cat-breakdown { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 18px; }
   .cat-breakdown h3 { margin: 0 0 12px 0; font-size: 13px; color: var(--ink-soft); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+  /* bloco recolhivel (ex: Gasto por categoria) */
+  details.cat-breakdown { padding: 0; }
+  details.cat-breakdown > summary {
+    list-style: none; cursor: pointer; padding: 14px 18px; font-size: 13px; color: var(--ink-soft);
+    font-weight: 600; text-transform: uppercase; letter-spacing: .03em; display: flex;
+    align-items: center; justify-content: space-between; user-select: none;
+  }
+  details.cat-breakdown > summary::-webkit-details-marker { display: none; }
+  details.cat-breakdown > summary::after { content: '▾'; font-size: 12px; color: var(--ink-faint); transition: transform .15s; }
+  details.cat-breakdown[open] > summary::after { transform: rotate(180deg); }
+  details.cat-breakdown > summary:hover { color: var(--ink); }
+  details.cat-breakdown > .det-body { padding: 0 18px 14px 18px; }
   .cat-row { display: flex; justify-content: space-between; font-size: 13.5px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
   .cat-row:last-child { border-bottom: none; }
 
@@ -1081,17 +1097,17 @@ def index():
         </div>
 
         <div class="cards">
-          <div class="card"><div class="label">Gasto real do mes</div><div class="val">R$ {gasto_real:,.2f}</div></div>
-          <div class="card"><div class="label">Lançamentos</div><div class="val">{total}</div></div>
-          <div class="card"><div class="label">Conferidas</div><div class="val">{conf} / {total}</div></div>
-          <div class="card"><div class="label">Fechamento da fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div style="font-size:12px;color:#888;margin-top:4px">Proximo: {proximo_fechamento.strftime('%d/%m/%Y')}</div></div>
-          <div class="card"><div class="label">Vencimento da fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div style="font-size:12px;color:#888;margin-top:4px">{'Proximo: ' + proximo_vencimento.strftime('%d/%m/%Y') if proximo_vencimento else ''}</div></div>
+          <div class="card"><div class="label" title="Gasto real do mês">Gasto real do mês</div><div class="val">R$ {gasto_real:,.2f}</div></div>
+          <div class="card"><div class="label" title="Lançamentos">Lançamentos</div><div class="val">{total}</div></div>
+          <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{conf} / {total}</div></div>
+          <div class="card"><div class="label" title="Fechamento da fatura">Fechamento fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div class="sub">Próx: {proximo_fechamento.strftime('%d/%m/%y')}</div></div>
+          <div class="card"><div class="label" title="Vencimento da fatura">Vencimento fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div class="sub">{'Próx: ' + proximo_vencimento.strftime('%d/%m/%y') if proximo_vencimento else ''}</div></div>
         </div>
 
-        <div class="cat-breakdown">
-          <h3>Gasto por categoria (mes)</h3>
-          {cat_rows_html}
-        </div>
+        <details class="cat-breakdown">
+          <summary>Gasto por categoria (mês)</summary>
+          <div class="det-body">{cat_rows_html}</div>
+        </details>
 
         <table class="compacta">
           <thead><tr>
@@ -1215,12 +1231,14 @@ def index():
               const doc = new DOMParser().parseFromString(html, 'text/html');
               const novaTabela = doc.querySelector('table.compacta');
               const novosCards = doc.querySelector('.cards');
-              const novaCat = doc.querySelector('.cat-breakdown:not(#formManual)');
+              const novaCat = doc.querySelector('details.cat-breakdown');
               if (novaTabela) document.querySelector('table.compacta').replaceWith(novaTabela);
               if (novosCards) document.querySelector('.cards').replaceWith(novosCards);
-              const catAtual = document.querySelectorAll('.cat-breakdown');
-              if (novaCat && catAtual.length) {{
-                catAtual[catAtual.length - 1].replaceWith(novaCat);
+              const catAtual = document.querySelector('details.cat-breakdown');
+              if (novaCat && catAtual) {{
+                // preserva o estado aberto/fechado escolhido pelo usuario
+                novaCat.open = catAtual.open;
+                catAtual.replaceWith(novaCat);
               }}
               const scriptNovo = doc.querySelector('script[data-detalhes]');
               if (scriptNovo) {{
