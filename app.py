@@ -1,6 +1,8 @@
 import os
 import functools
 import json
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 
 import psycopg2
@@ -8,6 +10,12 @@ import psycopg2.extras
 from flask import Flask, request, redirect, session, jsonify
 
 app = Flask(__name__)
+
+# URL do serviço bussola-financeira-app que faz a sincronizacao com o Pluggy.
+# Pode ser sobrescrita via env var caso o dominio mude.
+BUSSOLA_SYNC_URL = os.environ.get(
+    "BUSSOLA_SYNC_URL", "https://o9eitr54t888rej2cjjpak8y.coolify.brdrive.net/sync"
+)
 app.secret_key = os.environ.get("SECRET_KEY", "troque-isto-em-producao")
 
 USERS = {
@@ -91,6 +99,45 @@ def cat_pt(categoria):
     if not categoria:
         return "-"
     return CATEGORIA_PT.get(categoria, categoria)
+
+
+def get_ultima_sincronizacao():
+    """Busca o status da ultima execucao de sync registrada pelo bussola-financeira-app."""
+    try:
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT executado_em, status, transacoes_novas, transacoes_atualizadas, mensagem_erro "
+            "FROM cartao.sync_log ORDER BY executado_em DESC LIMIT 1;"
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"executado_em": None, "status": None}
+        executado_local = row["executado_em"] - timedelta(hours=3) if row["executado_em"] else None
+        return {
+            "executado_em": executado_local.strftime("%d/%m/%Y %H:%M") if executado_local else None,
+            "status": row["status"],
+            "transacoes_novas": row["transacoes_novas"],
+            "transacoes_atualizadas": row["transacoes_atualizadas"],
+            "mensagem_erro": row["mensagem_erro"],
+        }
+    except Exception as e:
+        return {"executado_em": None, "status": "erro", "mensagem_erro": str(e)}
+
+
+def disparar_sincronizacao():
+    """Chama o endpoint /sync do bussola-financeira-app para forcar uma atualizacao imediata."""
+    try:
+        req = urllib.request.Request(BUSSOLA_SYNC_URL, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp.read()
+        return True, None
+    except urllib.error.URLError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, str(e)
 
 
 def get_conn():
@@ -384,6 +431,15 @@ BASE_CSS = """
   .rel-actions { margin-left:auto; display:flex; gap:10px; align-items:center; }
   .chart-card { background:#fff; border-radius:12px; padding:18px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.06); }
   .chart-card h3 { margin:0 0 14px 0; font-size:14px; color:#444; }
+  .sync-widget { display:flex; align-items:center; gap:8px; font-size:12px; color:#c7d0da; }
+  .sync-widget .sync-dot { width:7px; height:7px; border-radius:50%; background:#8a97a6; flex-shrink:0; }
+  .sync-widget .sync-dot.ok { background:#3bb26a; }
+  .sync-widget .sync-dot.erro { background:#d8534f; }
+  .sync-widget .sync-dot.rodando { background:#e0a83e; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+  .sync-btn { background:#33475b; color:#fff; border:1px solid #45596e; padding:5px 11px; border-radius:6px; cursor:pointer; font-size:12px; font-family:inherit; }
+  .sync-btn:hover { background:#3d5266; }
+  .sync-btn:disabled { opacity:.6; cursor:default; }
 </style>
 """
 
@@ -407,9 +463,54 @@ def topbar_html(titulo, ativo=None):
               <a href="/cartoes" class="{cls('cartoes')}">Gerenciar cartões</a>
             </div>
           </div>
+          <div class="sync-widget">
+            <span class="sync-dot" id="syncDot"></span>
+            <span id="syncTexto">Verificando...</span>
+            <button class="sync-btn" id="syncBtn" onclick="dispararSync()">Atualizar agora</button>
+          </div>
           <a href="/logout">Sair</a>
         </div>
       </div>
+      <script>
+        function syncFormatarTexto(d) {{
+          if (!d.executado_em) return 'Sem sincronização registrada';
+          let txt = 'Atualizado em ' + d.executado_em;
+          if (d.status && d.status !== 'ok') txt += ' (erro)';
+          return txt;
+        }}
+        async function syncCarregarStatus() {{
+          try {{
+            const r = await fetch('/api/sync-status');
+            const d = await r.json();
+            document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
+            const dot = document.getElementById('syncDot');
+            dot.className = 'sync-dot ' + (d.status === 'ok' ? 'ok' : (d.status ? 'erro' : ''));
+          }} catch (e) {{
+            document.getElementById('syncTexto').textContent = 'Status indisponível';
+          }}
+        }}
+        async function dispararSync() {{
+          const btn = document.getElementById('syncBtn');
+          const dot = document.getElementById('syncDot');
+          btn.disabled = true;
+          btn.textContent = 'Atualizando...';
+          dot.className = 'sync-dot rodando';
+          document.getElementById('syncTexto').textContent = 'Sincronizando com o Pluggy...';
+          try {{
+            const r = await fetch('/api/sync-agora', {{ method: 'POST' }});
+            const d = await r.json();
+            document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
+            dot.className = 'sync-dot ' + (d.status === 'ok' ? 'ok' : 'erro');
+          }} catch (e) {{
+            document.getElementById('syncTexto').textContent = 'Falha ao atualizar';
+            dot.className = 'sync-dot erro';
+          }} finally {{
+            btn.disabled = false;
+            btn.textContent = 'Atualizar agora';
+          }}
+        }}
+        syncCarregarStatus();
+      </script>
     """
 
 
@@ -444,6 +545,21 @@ def login():
 def logout():
     session.clear()
     return redirect("/login")
+
+
+@app.route("/api/sync-status")
+@login_required
+def api_sync_status():
+    return jsonify(get_ultima_sincronizacao())
+
+
+@app.route("/api/sync-agora", methods=["POST"])
+@login_required
+def api_sync_agora():
+    ok, erro = disparar_sincronizacao()
+    if not ok:
+        return jsonify({"executado_em": None, "status": "erro", "mensagem_erro": erro}), 502
+    return jsonify(get_ultima_sincronizacao())
 
 
 @app.route("/")
