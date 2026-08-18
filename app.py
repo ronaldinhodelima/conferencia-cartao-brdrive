@@ -1,6 +1,7 @@
 import os
 import functools
 import json
+import uuid
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
@@ -73,6 +74,20 @@ CATEGORIAS_EXTRA = ("BRDrive", "Agua / Gas", "Natacao", "Academia", "Viagem")
 
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
+
+# conta sintetica usada para lancamentos manuais (dinheiro em especie), fora do Pluggy
+CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
+
+
+def origem_label(tipo, connector_name, nome_conta):
+    """Rotulo amigavel de origem a partir do tipo da conta + nome do conector Pluggy."""
+    if tipo == "CREDIT":
+        return f"Cartão de Crédito {connector_name}"
+    if tipo == "BANK":
+        return f"Conta Corrente {connector_name}"
+    if tipo == "MANUAL":
+        return "Dinheiro (manual)"
+    return nome_conta or "Outra origem"
 
 
 def proxima_ocorrencia_dia(dia):
@@ -248,6 +263,20 @@ def migrate():
             "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
             "valor_id integer REFERENCES cartao.dimensao_valor(id) ON DELETE SET NULL, "
             "PRIMARY KEY (transacao_id, dimensao_id));"
+        )
+        conn.commit()
+
+        # conta sintetica para lancamentos manuais (dinheiro em especie), fora do Pluggy
+        cur.execute(
+            "INSERT INTO cartao.pluggy_item (item_id, connector_name, status) VALUES "
+            "('00000000-0000-0000-0000-000000000001', 'Manual', 'OK') "
+            "ON CONFLICT (item_id) DO NOTHING;"
+        )
+        cur.execute(
+            "INSERT INTO cartao.conta (account_id, item_id, nome, tipo, numero_final) VALUES "
+            "('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', "
+            "'Dinheiro', 'MANUAL', NULL) "
+            "ON CONFLICT (account_id) DO NOTHING;"
         )
         conn.commit()
 
@@ -551,7 +580,6 @@ def topbar_html(titulo, ativo=None):
         <div>{titulo} - {session.get('user')}</div>
         <div class="nav-menu">
           <a href="/" class="{cls('inicio')}">Lançamentos</a>
-          <a href="/conta-corrente" class="{cls('conta_corrente')}">Conta Corrente</a>
           <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
           <div class="dropdown" tabindex="0">
             <button class="dropbtn">Configurações ▾</button>
@@ -672,6 +700,7 @@ def api_sync_agora():
 def index():
     mes = request.args.get("mes") or datetime.now().strftime("%Y-%m")
     status = request.args.get("status", "todas")
+    origem_sel = request.args.getlist("origem")
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -679,49 +708,73 @@ def index():
     aplicar_regras(cur)
     conn.commit()
 
-    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id WHERE c.tipo = 'CREDIT' AND categoria IS NOT NULL;")
+    # origens disponiveis (uma por conta sincronizada via Pluggy + a conta manual de dinheiro)
+    cur.execute(
+        "SELECT c.account_id, c.tipo, c.nome, c.numero_final, p.connector_name "
+        "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
+        "ORDER BY c.tipo, p.connector_name;"
+    )
+    contas_todas = cur.fetchall()
+    origem_opcoes = [
+        (str(c["account_id"]), origem_label(c["tipo"], c["connector_name"], c["nome"]))
+        for c in contas_todas
+    ]
+    contas_by_id = {str(c["account_id"]): c for c in contas_todas}
+
+    cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
     categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
 
-    where = ["c.tipo = 'CREDIT'", "to_char(data_transacao, 'YYYY-MM') = %s"]
+    where = ["to_char(data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
+    if origem_sel:
+        where.append("t.account_id IN %s")
+        params.append(tuple(origem_sel))
     if status == "conferida":
         where.append("conferida = true")
     elif status == "pendente":
         where.append("conferida = false")
 
     cur.execute(
-        "SELECT t.transacao_id, data_transacao, descricao, categoria, "
+        "SELECT t.transacao_id, t.account_id, data_transacao, descricao, categoria, "
         "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
         "status, t.tipo, numero_cartao_final, parcela_atual, parcela_total, "
         "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada "
-        "FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
+        "FROM cartao.transacao t WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
         params,
     )
     rows = cur.fetchall()
 
     # resumo do mes (nao filtrado por status, sempre do mes inteiro; duplicadas nao contam)
+    where_resumo = ["to_char(data_transacao,'YYYY-MM') = %s", "COALESCE(duplicada, false) = false"]
+    params_resumo = [mes]
+    if origem_sel:
+        where_resumo.append("t.account_id IN %s")
+        params_resumo.append(tuple(origem_sel))
     cur.execute(
         "SELECT COUNT(*) total, SUM(CASE WHEN conferida THEN 1 ELSE 0 END) conferidas, "
         "SUM(CASE WHEN categoria NOT IN %s THEN COALESCE(valor_brl, valor_original) ELSE 0 END) AS gasto_real, "
         "SUM(COALESCE(valor_brl, valor_original)) AS total_bruto "
-        "FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id "
-        "WHERE c.tipo = 'CREDIT' AND to_char(data_transacao,'YYYY-MM') = %s AND COALESCE(duplicada, false) = false;",
-        (CATEGORIAS_NAO_GASTO, mes),
+        "FROM cartao.transacao t WHERE " + " AND ".join(where_resumo) + ";",
+        [CATEGORIAS_NAO_GASTO] + params_resumo,
     )
     resumo = cur.fetchone()
 
+    where_cat = ["to_char(data_transacao,'YYYY-MM') = %s", "categoria NOT IN %s",
+                 "categoria IS NOT NULL", "COALESCE(duplicada, false) = false"]
+    params_cat = [mes, CATEGORIAS_NAO_GASTO]
+    if origem_sel:
+        where_cat.append("t.account_id IN %s")
+        params_cat.append(tuple(origem_sel))
     cur.execute(
         "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
-        "FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id "
-        "WHERE c.tipo = 'CREDIT' AND to_char(data_transacao,'YYYY-MM') = %s "
-        "AND categoria NOT IN %s AND categoria IS NOT NULL AND COALESCE(duplicada, false) = false "
-        "GROUP BY categoria ORDER BY total DESC LIMIT 8;",
-        (mes, CATEGORIAS_NAO_GASTO),
+        "FROM cartao.transacao t WHERE " + " AND ".join(where_cat) +
+        " GROUP BY categoria ORDER BY total DESC LIMIT 8;",
+        params_cat,
     )
     por_categoria = cur.fetchall()
 
-    cur.execute("SELECT vencimento_fatura FROM cartao.conta LIMIT 1;")
+    cur.execute("SELECT vencimento_fatura FROM cartao.conta WHERE tipo = 'CREDIT' LIMIT 1;")
     conta_row = cur.fetchone()
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
@@ -760,6 +813,20 @@ def index():
         prefixo = nomes_cartao.get(final4)
         return prefixo if prefixo else f"final {final4}"
 
+    def origem_curta(account_id):
+        c = contas_by_id.get(str(account_id))
+        if not c:
+            return "-"
+        if c["tipo"] == "CREDIT":
+            return nome_cartao_curto(c["numero_final"])
+        return origem_label(c["tipo"], c["connector_name"], c["nome"])
+
+    def origem_completa(account_id):
+        c = contas_by_id.get(str(account_id))
+        if not c:
+            return "-"
+        return origem_label(c["tipo"], c["connector_name"], c["nome"])
+
     dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
     proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
     proximo_vencimento = proxima_ocorrencia_dia(dia_vencimento) if dia_vencimento else None
@@ -788,6 +855,17 @@ def index():
         obs = (r["observacao"] or "").replace('"', "&quot;")
         rid = r["transacao_id"]
 
+        conta_info = contas_by_id.get(str(r["account_id"]))
+        eh_nao_credito = conta_info and conta_info["tipo"] != "CREDIT"
+        # cartao de credito: mantem exibicao tradicional (sem sinal). conta corrente/manual: sinaliza entrada/saida
+        if eh_nao_credito:
+            sinal = "-" if r["tipo"] == "DEBIT" else "+"
+            cor_valor = "color:#c0392b" if r["tipo"] == "DEBIT" else "color:#1a7a3c"
+            valor_fmt = f'{sinal} R$ {abs(r["valor"]):,.2f}'
+        else:
+            cor_valor = ""
+            valor_fmt = f'R$ {r["valor"]:,.2f}'
+
         dim_tds = []
         dim_detalhes = {}
         for d in dimensoes:
@@ -805,10 +883,10 @@ def index():
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td>{data_fmt}</td>'
             f'<td>{r["descricao"]}</td>'
-            f'<td class="cartao-cell" title="{nome_cartao(r["numero_cartao_final"])}">{nome_cartao_curto(r["numero_cartao_final"])}</td>'
+            f'<td class="cartao-cell" title="{origem_completa(r["account_id"])}">{origem_curta(r["account_id"])}</td>'
             f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
-            f'<td class="valor">R$ {r["valor"]:,.2f}</td>'
+            f'<td class="valor" style="{cor_valor}">{valor_fmt}</td>'
             f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
             f'<td style="text-align:center"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
             f'<td style="text-align:center"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
@@ -819,11 +897,11 @@ def index():
             "data": data_fmt,
             "descricao": r["descricao"],
             "categoria": cat_pt(r["categoria"]),
-            "valor": f'R$ {r["valor"]:,.2f}',
+            "valor": valor_fmt,
             "valor_original": f'{r["valor_original"]:,.2f} {r["moeda_original"] or ""}' if r["valor_original"] is not None else "-",
             "status": r["status"] or "-",
             "tipo": r["tipo"] or "-",
-            "cartao": nome_cartao(r["numero_cartao_final"]),
+            "origem": origem_completa(r["account_id"]),
             "parcela": f'{r["parcela_atual"]}/{r["parcela_total"]}' if r["parcela_total"] and r["parcela_total"] > 1 else "À vista",
             "conferida": "Sim" if r["conferida"] else "Não",
             "conferida_por": r["conferida_por"] or "-",
@@ -836,7 +914,7 @@ def index():
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
     colspan_total = 9 + len(dimensoes)
-    body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhuma transacao neste filtro.</td></tr>'
+    body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
     dim_headers = "".join(f'<th>{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
@@ -844,12 +922,40 @@ def index():
         for c in por_categoria
     ) or '<div class="cat-row"><span>Sem dados</span></div>'
 
+    def chip_filter(nome, label, opcoes, selecionados):
+        n_sel = len(selecionados)
+        opts_html = "".join(
+            f'<label class="chip-opt">'
+            f'<input type="checkbox" name="{nome}" value="{val}" {"checked" if str(val) in selecionados else ""} '
+            f'onchange="irPara()"> {texto}</label>'
+            for val, texto in opcoes
+        )
+        return f"""
+        <div class="chipfilter">
+          <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
+            <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
+            {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
+          </button>
+          <div class="chip-panel">
+            <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
+            <div class="chip-list">{opts_html}</div>
+          </div>
+        </div>
+        """
+
+    origem_filtro_html = chip_filter("origem", "Origem", origem_opcoes, origem_sel)
+
+    categoria_options_manual = "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in categorias)
+    origem_options_manual = "".join(
+        f'<option value="{val}">{texto}</option>' for val, texto in origem_opcoes
+    )
+
     return f"""
     <html><head><title>Conferencia de Cartao</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Conferência de Cartão', 'inicio')}
       <div class="wrap">
-        <div class="filters">
+        <div class="filters" style="flex-wrap:wrap">
           <div>
             <label>Mes</label>
             <input type="month" id="mesInput" value="{mes}" onchange="irPara()">
@@ -862,11 +968,31 @@ def index():
               <option value="conferida" {"selected" if status=="conferida" else ""}>Conferidas</option>
             </select>
           </div>
+          {origem_filtro_html}
+          <div style="margin-left:auto">
+            <button type="button" onclick="toggleFormManual()" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer;font-size:13px">+ Lançamento manual</button>
+          </div>
+        </div>
+
+        <div id="formManual" class="cat-breakdown" style="display:none">
+          <h3>Novo lançamento manual (dinheiro)</h3>
+          <form onsubmit="return salvarManual(event)" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="date" id="manualData" required value="{datetime.now().strftime('%Y-%m-%d')}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+            <input type="text" id="manualDescricao" placeholder="Descrição" required style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;flex:1;min-width:160px">
+            <select id="manualDirecao" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+              <option value="saida">Saída</option>
+              <option value="entrada">Entrada</option>
+            </select>
+            <input type="number" id="manualValor" step="0.01" min="0.01" placeholder="Valor (R$)" required style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:130px">
+            <select id="manualCategoria" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">{categoria_options_manual}</select>
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Adicionar</button>
+            <span id="manualStatus" style="font-size:12px;color:#888"></span>
+          </form>
         </div>
 
         <div class="cards">
           <div class="card"><div class="label">Gasto real do mes</div><div class="val">R$ {gasto_real:,.2f}</div></div>
-          <div class="card"><div class="label">Transacoes</div><div class="val">{total}</div></div>
+          <div class="card"><div class="label">Lançamentos</div><div class="val">{total}</div></div>
           <div class="card"><div class="label">Conferidas</div><div class="val">{conf} / {total}</div></div>
           <div class="card"><div class="label">Fechamento da fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div style="font-size:12px;color:#888;margin-top:4px">Proximo: {proximo_fechamento.strftime('%d/%m/%Y')}</div></div>
           <div class="card"><div class="label">Vencimento da fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div style="font-size:12px;color:#888;margin-top:4px">{'Proximo: ' + proximo_vencimento.strftime('%d/%m/%Y') if proximo_vencimento else ''}</div></div>
@@ -879,7 +1005,7 @@ def index():
 
         <table>
           <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Cartao</th><th>Categoria</th>{dim_headers}<th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
+            <th>Data</th><th>Descricao</th><th>Origem</th><th>Categoria</th>{dim_headers}<th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -888,19 +1014,76 @@ def index():
       <div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
         <div class="modal">
           <span class="close" onclick="fecharModal()">&times;</span>
-          <h3>Detalhes da transação</h3>
+          <h3>Detalhes do lançamento</h3>
           <div id="modalBody"></div>
         </div>
       </div>
 
       <script>
+        // ---- chip filter (origem): dropdown com busca, checkbox toggle e navegacao por teclado ----
+        function cfToggle(btn) {{
+          const panel = btn.nextElementSibling;
+          const abrir = !panel.classList.contains('show');
+          document.querySelectorAll('.chip-panel.show').forEach(p => {{ if (p !== panel) p.classList.remove('show'); }});
+          if (abrir) {{
+            panel.classList.add('show');
+            const search = panel.querySelector('.chip-search');
+            if (search) {{ search.value = ''; cfFiltrar(search); search.focus(); }}
+          }} else {{
+            panel.classList.remove('show');
+          }}
+        }}
+        document.addEventListener('click', function(e) {{
+          if (!e.target.closest('.chipfilter')) {{
+            document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
+          }}
+        }});
+        function cfClear(e, btn) {{
+          e.stopPropagation();
+          const panel = btn.closest('.chipfilter').querySelector('.chip-panel');
+          panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+          irPara();
+        }}
+        function cfFiltrar(input) {{
+          const panel = input.closest('.chip-panel');
+          const q = input.value.toLowerCase();
+          panel.querySelectorAll('.chip-opt').forEach(opt => {{
+            opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+          }});
+        }}
+        function cfKeydown(e, input) {{
+          const panel = input.closest('.chip-panel');
+          const visiveis = Array.from(panel.querySelectorAll('.chip-opt')).filter(o => o.style.display !== 'none');
+          let idx = visiveis.findIndex(o => o.classList.contains('chip-hover'));
+          if (e.key === 'ArrowDown') {{
+            e.preventDefault();
+            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+            idx = Math.min(idx + 1, visiveis.length - 1);
+            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+          }} else if (e.key === 'ArrowUp') {{
+            e.preventDefault();
+            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+            idx = Math.max(idx - 1, 0);
+            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+          }} else if (e.key === 'Enter') {{
+            e.preventDefault();
+            if (idx >= 0) {{
+              const cb = visiveis[idx].querySelector('input[type=checkbox]');
+              cb.checked = !cb.checked;
+              irPara();
+            }}
+          }} else if (e.key === 'Escape') {{
+            panel.classList.remove('show');
+          }}
+        }}
+
         const detalhes = {json.dumps(detalhes_js)};
         function verDetalhes(id) {{
           const d = detalhes[id];
           if (!d) return;
           const labels = {{
             data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
-            valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', cartao: 'Cartão',
+            valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
             parcela: 'Parcela', conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
           }};
           let html = '';
@@ -926,7 +1109,11 @@ def index():
         function irPara() {{
           const mes = document.getElementById('mesInput').value;
           const status = document.getElementById('statusInput').value;
-          window.location = '/?mes=' + mes + '&status=' + status;
+          const params = new URLSearchParams();
+          params.set('mes', mes);
+          params.set('status', status);
+          document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
+          window.location = '/?' + params.toString();
         }}
         const DUPLICADA_OBS_PADRAO = {json.dumps(DUPLICADA_OBS_PADRAO)};
         const filaSalvar = {{}};
@@ -980,329 +1167,75 @@ def index():
           }}
           salvar(id, checkbox);
         }}
+        function toggleFormManual() {{
+          const f = document.getElementById('formManual');
+          f.style.display = f.style.display === 'none' ? 'block' : 'none';
+        }}
+        function salvarManual(e) {{
+          e.preventDefault();
+          const statusEl = document.getElementById('manualStatus');
+          statusEl.textContent = 'Salvando...';
+          const payload = {{
+            data: document.getElementById('manualData').value,
+            descricao: document.getElementById('manualDescricao').value,
+            direcao: document.getElementById('manualDirecao').value,
+            valor: document.getElementById('manualValor').value,
+            categoria: document.getElementById('manualCategoria').value
+          }};
+          fetch('/api/lancamento-manual', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(payload)
+          }}).then(r => r.json()).then(d => {{
+            if (d.ok) {{
+              window.location.reload();
+            }} else {{
+              statusEl.textContent = d.erro || 'Falha ao salvar';
+            }}
+          }}).catch(() => {{ statusEl.textContent = 'Falha ao salvar'; }});
+          return false;
+        }}
       </script>
     </body></html>
     """
 
 
-@app.route("/conta-corrente")
+@app.route("/api/lancamento-manual", methods=["POST"])
 @login_required
-def conta_corrente():
-    mes = request.args.get("mes") or datetime.now().strftime("%Y-%m")
-    status = request.args.get("status", "todas")
+def lancamento_manual():
+    data = request.get_json(force=True)
+    try:
+        data_str = (data.get("data") or "").strip()
+        descricao = (data.get("descricao") or "").strip()
+        direcao = data.get("direcao")
+        valor = float(str(data.get("valor") or "0").replace(",", "."))
+        categoria = data.get("categoria") or None
+        if not data_str or not descricao or valor <= 0 or direcao not in ("entrada", "saida"):
+            return jsonify({"ok": False, "erro": "Preencha data, descrição e um valor válido."}), 400
 
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        tipo = "CREDIT" if direcao == "entrada" else "DEBIT"
+        data_transacao = f"{data_str} 12:00:00-03:00"
 
-    aplicar_regras(cur)
-    conn.commit()
-
-    cur.execute("SELECT account_id, nome, numero_final, saldo_usado, atualizado_em FROM cartao.conta WHERE tipo = 'BANK';")
-    contas_bank = cur.fetchall()
-    account_ids = tuple(c["account_id"] for c in contas_bank)
-
-    if not account_ids:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO cartao.transacao ("
+            "transacao_id, account_id, descricao, descricao_bruta, valor_original, moeda_original, "
+            "valor_brl, data_transacao, categoria, status, tipo, criado_em, atualizado_em, sincronizado_em"
+            ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,%s,'POSTED',%s, now(), now(), now());",
+            (
+                str(uuid.uuid4()), CONTA_MANUAL_ID, descricao, descricao,
+                valor, valor, data_transacao, categoria, tipo,
+            ),
+        )
+        conn.commit()
         cur.close()
         conn.close()
-        return f"""
-        <html><head><title>Conta Corrente</title>{BASE_CSS}</head>
-        <body>
-          {topbar_html('Conta Corrente', 'conta_corrente')}
-          <div class="wrap">
-            <div class="cat-breakdown">
-              <h3>Nenhuma conta corrente sincronizada ainda</h3>
-              <div class="cat-row"><span>Assim que a sincronizacao trouxer a conta Unicred, os lancamentos aparecerao aqui.</span></div>
-            </div>
-          </div>
-        </body></html>
-        """
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "erro": str(e)}), 400
 
-    cur.execute(
-        "SELECT DISTINCT categoria FROM cartao.transacao WHERE account_id IN %s AND categoria IS NOT NULL;",
-        (account_ids,),
-    )
-    categorias_db = {r["categoria"] for r in cur.fetchall()}
-    categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
 
-    where = ["account_id IN %s", "to_char(data_transacao, 'YYYY-MM') = %s"]
-    params = [account_ids, mes]
-    if status == "conferida":
-        where.append("conferida = true")
-    elif status == "pendente":
-        where.append("conferida = false")
-
-    cur.execute(
-        "SELECT transacao_id, data_transacao, descricao, categoria, "
-        "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
-        "status, tipo, conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada "
-        "FROM cartao.transacao WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
-        params,
-    )
-    rows = cur.fetchall()
-
-    cur.execute(
-        "SELECT COUNT(*) total, SUM(CASE WHEN conferida THEN 1 ELSE 0 END) conferidas, "
-        "SUM(CASE WHEN tipo = 'DEBIT' THEN COALESCE(valor_brl, valor_original) ELSE 0 END) AS saidas, "
-        "SUM(CASE WHEN tipo = 'CREDIT' THEN COALESCE(valor_brl, valor_original) ELSE 0 END) AS entradas "
-        "FROM cartao.transacao WHERE account_id IN %s AND to_char(data_transacao,'YYYY-MM') = %s "
-        "AND COALESCE(duplicada, false) = false;",
-        (account_ids, mes),
-    )
-    resumo = cur.fetchone()
-
-    cur.execute(
-        "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
-        "FROM cartao.transacao WHERE account_id IN %s AND to_char(data_transacao,'YYYY-MM') = %s "
-        "AND tipo = 'DEBIT' AND categoria IS NOT NULL AND COALESCE(duplicada, false) = false "
-        "GROUP BY categoria ORDER BY total DESC LIMIT 8;",
-        (account_ids, mes),
-    )
-    por_categoria = cur.fetchall()
-
-    cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
-    dimensoes = cur.fetchall()
-
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
-    valores_por_dim = {}
-    for v in cur.fetchall():
-        valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
-
-    mapa_dim_transacao = {}
-    ids_visiveis = [r["transacao_id"] for r in rows]
-    if ids_visiveis:
-        cur.execute(
-            "SELECT transacao_id, dimensao_id, valor_id FROM cartao.transacao_dimensao WHERE transacao_id IN %s;",
-            (tuple(ids_visiveis),),
-        )
-        for m in cur.fetchall():
-            mapa_dim_transacao[(str(m["transacao_id"]), m["dimensao_id"])] = m["valor_id"]
-
-    cur.close()
-    conn.close()
-
-    saldo_atual = sum((c["saldo_usado"] or 0) for c in contas_bank)
-    nome_conta = contas_bank[0]["nome"] or "Conta Corrente"
-    numero_final = contas_bank[0]["numero_final"]
-
-    def cat_options(selected):
-        return "".join(
-            f'<option value="{c}" {"selected" if c == selected else ""}>{cat_pt(c)}</option>'
-            for c in categorias
-        )
-
-    def dim_options(dimensao_id, selecionado):
-        opts = ['<option value="">(nao definido)</option>']
-        for v in valores_por_dim.get(dimensao_id, []):
-            sel = "selected" if selecionado == v["id"] else ""
-            opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
-        return "".join(opts)
-
-    trs = []
-    detalhes_js = {}
-    for r in rows:
-        checked = "checked" if r["conferida"] else ""
-        dup_checked = "checked" if r["duplicada"] else ""
-        classes = " ".join(c for c in ["conferida" if r["conferida"] else "", "duplicada" if r["duplicada"] else ""] if c)
-        data_local = r["data_transacao"] - timedelta(hours=3)
-        data_fmt = data_local.strftime("%d/%m/%Y %H:%M")
-        obs = (r["observacao"] or "").replace('"', "&quot;")
-        rid = r["transacao_id"]
-        sinal = "-" if r["tipo"] == "DEBIT" else "+"
-        cor_valor = "color:#c0392b" if r["tipo"] == "DEBIT" else "color:#1a7a3c"
-
-        dim_tds = []
-        dim_detalhes = {}
-        for d in dimensoes:
-            valor_sel = mapa_dim_transacao.get((str(rid), d["id"]))
-            faltando = d["obrigatoria"] and not valor_sel
-            estilo = ' style="border-color:#c0392b;background:#fff5f5"' if faltando else ""
-            dim_tds.append(
-                f'<td><select class="dim-select" data-dim="{d["id"]}"{estilo} '
-                f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
-            )
-            nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
-            dim_detalhes[d["nome"]] = nomes_valor.get(valor_sel, "(nao definido)")
-
-        trs.append(
-            f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
-            f'<td>{data_fmt}</td>'
-            f'<td>{r["descricao"]}</td>'
-            f'<td><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
-            + "".join(dim_tds) +
-            f'<td class="valor" style="{cor_valor}">{sinal} R$ {abs(r["valor"]):,.2f}</td>'
-            f'<td><input class="obs-input" type="text" value="{obs}" placeholder="observacao..." onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
-            f'<td style="text-align:center"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
-            f'<td><span class="status" id="status-{rid}">salvo</span></td>'
-            f'</tr>'
-        )
-        detalhes = {
-            "data": data_fmt,
-            "descricao": r["descricao"],
-            "categoria": cat_pt(r["categoria"]),
-            "valor": f'{sinal} R$ {abs(r["valor"]):,.2f}',
-            "valor_original": f'{r["valor_original"]:,.2f} {r["moeda_original"] or ""}' if r["valor_original"] is not None else "-",
-            "status": r["status"] or "-",
-            "tipo": r["tipo"] or "-",
-            "conferida": "Sim" if r["conferida"] else "Não",
-            "conferida_por": r["conferida_por"] or "-",
-            "observacao": r["observacao"] or "-",
-        }
-        detalhes.update(dim_detalhes)
-        detalhes_js[str(rid)] = detalhes
-
-    total = resumo["total"] or 0
-    conf = resumo["conferidas"] or 0
-    saidas = resumo["saidas"] or 0
-    entradas = resumo["entradas"] or 0
-    colspan_total = 8 + len(dimensoes)
-    body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lancamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th>{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
-
-    cat_rows_html = "".join(
-        f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
-        for c in por_categoria
-    ) or '<div class="cat-row"><span>Sem dados</span></div>'
-
-    return f"""
-    <html><head><title>Conta Corrente</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Conta Corrente', 'conta_corrente')}
-      <div class="wrap">
-        <div class="filters">
-          <div>
-            <label>Mes</label>
-            <input type="month" id="mesInput" value="{mes}" onchange="irPara()">
-          </div>
-          <div>
-            <label>Status</label>
-            <select id="statusInput" onchange="irPara()">
-              <option value="todas" {"selected" if status=="todas" else ""}>Todas</option>
-              <option value="pendente" {"selected" if status=="pendente" else ""}>Pendentes</option>
-              <option value="conferida" {"selected" if status=="conferida" else ""}>Conferidas</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="cards">
-          <div class="card"><div class="label">Conta</div><div class="val" style="font-size:16px">{nome_conta}</div><div style="font-size:12px;color:#888;margin-top:4px">{'final ' + numero_final if numero_final else ''}</div></div>
-          <div class="card"><div class="label">Saldo atual</div><div class="val">R$ {saldo_atual:,.2f}</div></div>
-          <div class="card"><div class="label">Entradas no mes</div><div class="val" style="color:#1a7a3c">R$ {entradas:,.2f}</div></div>
-          <div class="card"><div class="label">Saidas no mes</div><div class="val" style="color:#c0392b">R$ {saidas:,.2f}</div></div>
-          <div class="card"><div class="label">Conferidas</div><div class="val">{conf} / {total}</div></div>
-        </div>
-
-        <div class="cat-breakdown">
-          <h3>Saidas por categoria (mes)</h3>
-          {cat_rows_html}
-        </div>
-
-        <table>
-          <thead><tr>
-            <th>Data</th><th>Descricao</th><th>Categoria</th>{dim_headers}<th>Valor</th><th>Observacao</th><th>Conferida</th><th>Duplicada</th><th></th>
-          </tr></thead>
-          <tbody>{body_rows}</tbody>
-        </table>
-      </div>
-
-      <div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
-        <div class="modal">
-          <span class="close" onclick="fecharModal()">&times;</span>
-          <h3>Detalhes do lancamento</h3>
-          <div id="modalBody"></div>
-        </div>
-      </div>
-
-      <script>
-        const detalhes = {json.dumps(detalhes_js)};
-        function verDetalhes(id) {{
-          const d = detalhes[id];
-          if (!d) return;
-          const labels = {{
-            data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
-            valor_original: 'Valor original', status: 'Status', tipo: 'Tipo',
-            conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
-          }};
-          let html = '';
-          for (const k in labels) {{
-            html += '<div class="row"><span>' + labels[k] + '</span><span>' + d[k] + '</span></div>';
-          }}
-          for (const k in d) {{
-            if (!(k in labels)) {{
-              html += '<div class="row"><span>' + k + '</span><span>' + d[k] + '</span></div>';
-            }}
-          }}
-          document.getElementById('modalBody').innerHTML = html;
-          document.getElementById('modalBg').classList.add('show');
-        }}
-        function fecharModal() {{
-          document.getElementById('modalBg').classList.remove('show');
-        }}
-        function linhaClick(e, id) {{
-          const tag = e.target.tagName;
-          if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
-          verDetalhes(id);
-        }}
-        function irPara() {{
-          const mes = document.getElementById('mesInput').value;
-          const status = document.getElementById('statusInput').value;
-          window.location = '/conta-corrente?mes=' + mes + '&status=' + status;
-        }}
-        const DUPLICADA_OBS_PADRAO = {json.dumps(DUPLICADA_OBS_PADRAO)};
-        const filaSalvar = {{}};
-        function salvar(id, el) {{
-          const tr = el.closest('tr');
-          const dimensoes = {{}};
-          tr.querySelectorAll('.dim-select').forEach(sel => {{
-            dimensoes[sel.dataset.dim] = sel.value || null;
-          }});
-          const payload = {{
-            conferida: tr.querySelector('.conf-check').checked,
-            duplicada: tr.querySelector('.dup-check').checked,
-            observacao: tr.querySelector('.obs-input').value,
-            categoria: tr.querySelector('.cat-select').value,
-            dimensoes: dimensoes
-          }};
-          const anterior = filaSalvar[id] || Promise.resolve();
-          const atual = anterior.then(() => fetch('/api/transacao/' + id, {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify(payload)
-          }})).then(r => r.json()).then(d => {{
-            if (d.ok) {{
-              const confFinal = payload.conferida && !d.bloqueada;
-              tr.querySelector('.conf-check').checked = confFinal;
-              tr.classList.toggle('conferida', confFinal);
-              tr.classList.toggle('duplicada', payload.duplicada);
-              tr.querySelectorAll('.dim-select').forEach(sel => {{
-                sel.style.borderColor = '';
-                sel.style.background = '';
-              }});
-              if (d.bloqueada) {{
-                (d.faltando || []).forEach(dimId => {{
-                  const sel = tr.querySelector('.dim-select[data-dim="' + dimId + '"]');
-                  if (sel) {{ sel.style.borderColor = '#c0392b'; sel.style.background = '#fff5f5'; }}
-                }});
-                alert('Nao foi possivel confirmar: preencha os campos obrigatorios destacados em vermelho.');
-              }}
-              const s = document.getElementById('status-' + id);
-              s.classList.add('show');
-              setTimeout(() => s.classList.remove('show'), 1500);
-            }}
-          }});
-          filaSalvar[id] = atual;
-        }}
-        function toggleDuplicada(id, checkbox) {{
-          const tr = checkbox.closest('tr');
-          const obsInput = tr.querySelector('.obs-input');
-          if (checkbox.checked && !obsInput.value.trim()) {{
-            obsInput.value = DUPLICADA_OBS_PADRAO;
-          }}
-          salvar(id, checkbox);
-        }}
-      </script>
-    </body></html>
-    """
 
 
 @app.route("/api/transacao/<transacao_id>", methods=["POST"])
