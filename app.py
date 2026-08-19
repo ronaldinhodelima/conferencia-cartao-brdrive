@@ -1,6 +1,9 @@
 import os
+import csv
 import functools
+import io
 import json
+import re
 import uuid
 import urllib.request
 import urllib.error
@@ -151,6 +154,173 @@ def carregar_origens(cur):
         contas_by_id[aid] = {**c, "banco": banco, "label": completo, "label_curto": curto}
         opcoes.append((aid, curto, completo))
     return contas_by_id, opcoes
+
+
+IMPORT_NAMESPACE = uuid.UUID("6f1c2a52-0000-4000-8000-000000000042")
+
+
+def _decodificar(raw):
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _num_br(txt):
+    """Converte '1.234,56', '-1234.56', 'R$ 1.234,56' em float."""
+    if txt is None:
+        return None
+    s = str(txt).strip().replace("R$", "").replace(" ", "").replace("\xa0", "")
+    if not s:
+        return None
+    negativo = s.startswith("(") and s.endswith(")")
+    if negativo:
+        s = s[1:-1]
+    s = s.replace("+", "")
+    if "," in s and "." in s:
+        # 1.234,56 (BR) ou 1,234.56 (US) - o ultimo separador manda
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return -v if negativo else v
+
+
+def _data_br(txt):
+    """Aceita dd/mm/aaaa, aaaa-mm-dd e o formato OFX (aaaammdd...)."""
+    s = str(txt or "").strip()
+    if not s:
+        return None
+    # OFX: 20260115 ou 20260115120000[-3:BRT]
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})(?:\d{2})?", s)
+    if m and not re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+        except ValueError:
+            return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_ofx(texto):
+    """Extrai as transacoes de um arquivo OFX (formato SGML dos bancos brasileiros)."""
+    linhas = []
+    for bloco in re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto, re.S | re.I):
+        def tag(nome):
+            m = re.search(rf"<{nome}>([^<\r\n]*)", bloco, re.I)
+            return m.group(1).strip() if m else ""
+        data = _data_br(tag("DTPOSTED"))
+        valor = _num_br(tag("TRNAMT"))
+        desc = tag("MEMO") or tag("NAME")
+        if data is None or valor is None:
+            continue
+        linhas.append({"data": data, "descricao": desc.strip(), "valor": valor, "fitid": tag("FITID")})
+    return linhas
+
+
+def parse_csv(texto):
+    """Extrai transacoes de um CSV, detectando delimitador e as colunas de data/descricao/valor."""
+    # escolhe o delimitador que produz o maior numero de colunas de forma consistente
+    # (o Sniffer erra com valores em formato BR, onde a virgula e decimal)
+    melhor, melhor_score = ";", -1
+    for cand in (";", ",", "\t", "|"):
+        try:
+            linhas = [l for l in csv.reader(io.StringIO(texto), delimiter=cand) if any((c or "").strip() for c in l)]
+        except csv.Error:
+            continue
+        if not linhas:
+            continue
+        contagens = [len(l) for l in linhas[:50]]
+        mais_comum = max(set(contagens), key=contagens.count)
+        if mais_comum < 2:
+            continue
+        consistencia = contagens.count(mais_comum) / len(contagens)
+        score = mais_comum * consistencia
+        if score > melhor_score:
+            melhor, melhor_score = cand, score
+    delim = melhor
+
+    linhas_raw = list(csv.reader(io.StringIO(texto), delimiter=delim))
+    linhas_raw = [l for l in linhas_raw if any((c or "").strip() for c in l)]
+    if not linhas_raw:
+        return [], "Arquivo vazio."
+
+    def norm(s):
+        s = (s or "").strip().lower()
+        for a, b in (("ç", "c"), ("ã", "a"), ("á", "a"), ("â", "a"), ("é", "e"), ("ê", "e"), ("í", "i"), ("ó", "o"), ("õ", "o"), ("ú", "u")):
+            s = s.replace(a, b)
+        return s
+
+    # procura a linha de cabecalho nas primeiras linhas
+    idx_cab, cols = None, {}
+    for i, linha in enumerate(linhas_raw[:15]):
+        n = [norm(c) for c in linha]
+        c = {}
+        for j, cel in enumerate(n):
+            if "data" in cel or cel in ("date", "dt"):
+                c.setdefault("data", j)
+            elif any(k in cel for k in ("descri", "historico", "lancamento", "memo", "estabelecimento", "titulo")):
+                c.setdefault("descricao", j)
+            elif any(k in cel for k in ("valor", "amount", "montante")) and "moeda" not in cel:
+                c.setdefault("valor", j)
+        if "data" in c and "valor" in c:
+            idx_cab, cols = i, c
+            break
+
+    resultado = []
+    if idx_cab is None:
+        # sem cabecalho reconhecido: tenta posicional (data ; descricao ; valor)
+        for linha in linhas_raw:
+            if len(linha) < 3:
+                continue
+            data = _data_br(linha[0])
+            valor = _num_br(linha[-1])
+            if data and valor is not None:
+                resultado.append({"data": data, "descricao": " ".join(linha[1:-1]).strip(), "valor": valor, "fitid": ""})
+        if not resultado:
+            return [], "Não consegui identificar as colunas de data, descrição e valor. Verifique o arquivo."
+        return resultado, None
+
+    for linha in linhas_raw[idx_cab + 1:]:
+        if len(linha) <= max(cols.values()):
+            continue
+        data = _data_br(linha[cols["data"]])
+        valor = _num_br(linha[cols["valor"]])
+        if data is None or valor is None:
+            continue
+        desc = linha[cols["descricao"]].strip() if "descricao" in cols else ""
+        resultado.append({"data": data, "descricao": desc, "valor": valor, "fitid": ""})
+    if not resultado:
+        return [], "Nenhuma linha válida encontrada no arquivo."
+    return resultado, None
+
+
+def normalizar_para_conta(linhas, tipo_conta, inverter):
+    """Ajusta o sinal ao padrao usado no banco de dados.
+
+    - Conta corrente (BANK): entrada positiva, saida negativa (igual ao OFX).
+    - Cartao (CREDIT): compra positiva, pagamento negativo (invertido em relacao ao OFX).
+    """
+    saida = []
+    for l in linhas:
+        v = float(l["valor"])
+        if inverter:
+            v = -v
+        if tipo_conta == "CREDIT":
+            tipo = "DEBIT" if v > 0 else "CREDIT"
+        else:
+            tipo = "CREDIT" if v > 0 else "DEBIT"
+        saida.append({**l, "valor": round(v, 2), "tipo": tipo})
+    return saida
 
 
 def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()"):
@@ -728,6 +898,7 @@ def topbar_html(titulo, ativo=None):
               <a href="/dimensoes" class="{cls('dimensoes')}">Gerenciar dimensões</a>
               <a href="/regras" class="{cls('regras')}">Regras automáticas</a>
               <a href="/cartoes" class="{cls('cartoes')}">Gerenciar cartões</a>
+              <a href="/importar" class="{cls('importar')}">Importar extrato / fatura</a>
             </div>
           </div>
           <div class="sync-widget">
@@ -2829,6 +3000,277 @@ def relatorios_lancamentos():
             "valor": float(r["valor"] or 0),
         })
     return jsonify({"lancamentos": lancamentos, "total": len(lancamentos)})
+
+
+def _ler_arquivo_importacao(arquivo):
+    """Devolve (linhas, erro). Detecta OFX ou CSV pelo conteudo/extensao."""
+    raw = arquivo.read()
+    if not raw:
+        return None, "Arquivo vazio."
+    if len(raw) > 8 * 1024 * 1024:
+        return None, "Arquivo muito grande (limite de 8 MB)."
+    texto = _decodificar(raw)
+    nome = (arquivo.filename or "").lower()
+    if "<STMTTRN>" in texto.upper() or nome.endswith((".ofx", ".qfx")):
+        linhas = parse_ofx(texto)
+        if not linhas:
+            return None, "Não encontrei transações no OFX. O arquivo pode estar em outro formato."
+        return linhas, None
+    return parse_csv(texto)
+
+
+@app.route("/api/importar/preview", methods=["POST"])
+@login_required
+def importar_preview():
+    arquivo = request.files.get("arquivo")
+    account_id = request.form.get("origem")
+    inverter = request.form.get("inverter") == "1"
+    if not arquivo or not account_id:
+        return jsonify({"ok": False, "erro": "Escolha o arquivo e a origem."}), 400
+
+    linhas, erro = _ler_arquivo_importacao(arquivo)
+    if erro:
+        return jsonify({"ok": False, "erro": erro}), 400
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT tipo FROM cartao.conta WHERE account_id = %s;", (account_id,))
+    conta = cur.fetchone()
+    if not conta:
+        cur.close()
+        conn.close()
+        return jsonify({"ok": False, "erro": "Origem inválida."}), 400
+
+    linhas = normalizar_para_conta(linhas, conta["tipo"], inverter)
+    datas = [l["data"] for l in linhas]
+
+    # o que ja existe no periodo, para marcar duplicados (mesma data + mesmo valor)
+    cur.execute(
+        "SELECT to_char(data_transacao, 'YYYY-MM-DD') AS d, "
+        "ROUND(COALESCE(valor_brl, valor_original), 2) AS v, descricao "
+        "FROM cartao.transacao WHERE account_id = %s AND data_transacao::date BETWEEN %s AND %s;",
+        (account_id, min(datas), max(datas)),
+    )
+    existentes = {}
+    for r in cur.fetchall():
+        existentes.setdefault((r["d"], float(r["v"])), []).append(r["descricao"] or "")
+    cur.close()
+    conn.close()
+
+    itens = []
+    for l in linhas:
+        chave = (l["data"].isoformat(), float(l["valor"]))
+        ja_tem = existentes.get(chave)
+        itens.append({
+            "data": l["data"].isoformat(),
+            "data_fmt": l["data"].strftime("%d/%m/%Y"),
+            "descricao": l["descricao"] or "(sem descrição)",
+            "valor": l["valor"],
+            "tipo": l["tipo"],
+            "fitid": l.get("fitid") or "",
+            "duplicado": bool(ja_tem),
+            "ja_existe_como": (ja_tem[0][:60] if ja_tem else ""),
+        })
+    itens.sort(key=lambda i: i["data"])
+    novos = sum(1 for i in itens if not i["duplicado"])
+    return jsonify({
+        "ok": True,
+        "itens": itens,
+        "total": len(itens),
+        "novos": novos,
+        "duplicados": len(itens) - novos,
+        "periodo": f'{itens[0]["data_fmt"]} a {itens[-1]["data_fmt"]}' if itens else "-",
+    })
+
+
+@app.route("/api/importar/confirmar", methods=["POST"])
+@login_required
+def importar_confirmar():
+    dados = request.get_json(force=True)
+    account_id = dados.get("origem")
+    itens = dados.get("itens") or []
+    if not account_id or not itens:
+        return jsonify({"ok": False, "erro": "Nada para importar."}), 400
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        inseridos = 0
+        for it in itens:
+            data = _data_br(it.get("data"))
+            valor = float(it.get("valor"))
+            desc = (it.get("descricao") or "").strip()[:300]
+            if not data:
+                continue
+            # id estavel: reimportar o mesmo arquivo nao duplica
+            semente = it.get("fitid") or f'{data.isoformat()}|{valor}|{desc}'
+            tid = str(uuid.uuid5(IMPORT_NAMESPACE, f"{account_id}|{semente}"))
+            cur.execute(
+                "INSERT INTO cartao.transacao ("
+                "transacao_id, account_id, descricao, descricao_bruta, valor_original, moeda_original, "
+                "valor_brl, data_transacao, status, tipo, criado_em, atualizado_em, sincronizado_em"
+                ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,'POSTED',%s, now(), now(), now()) "
+                "ON CONFLICT (transacao_id) DO NOTHING;",
+                (tid, account_id, desc, desc, valor, valor,
+                 f"{data.isoformat()} 12:00:00-03:00", it.get("tipo") or "DEBIT"),
+            )
+            inseridos += cur.rowcount
+        conn.commit()
+        # aplica as regras de classificacao automatica nos recem-importados
+        cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        aplicar_regras(cur2)
+        conn.commit()
+        cur2.close()
+        cur.close()
+        conn.close()
+        return jsonify({"ok": True, "inseridos": inseridos, "ignorados": len(itens) - inseridos})
+    except Exception as e:
+        return jsonify({"ok": False, "erro": str(e)}), 400
+
+
+@app.route("/importar")
+@login_required
+def importar_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    _, origem_opcoes = carregar_origens(cur)
+    cur.close()
+    conn.close()
+
+    origem_options = "".join(
+        f'<option value="{val}">{completo}</option>' for val, _curto, completo in origem_opcoes
+    )
+
+    return f"""
+    <html><head><title>Importar extrato / fatura</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Importar extrato / fatura', 'importar')}
+      <div class="wrap">
+        <div class="cat-breakdown">
+          <h3>1. Escolha o arquivo</h3>
+          <div style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;line-height:1.6">
+            Aceita <strong>OFX</strong> (o mais confiável) ou <strong>CSV</strong> exportado do internet banking.
+            Use isto para completar períodos que o Pluggy não traz mais — a API dele devolve
+            no máximo os 500 lançamentos mais recentes de cada conta.<br>
+            Nada é gravado antes de você conferir a prévia, e reimportar o mesmo arquivo não duplica.
+          </div>
+          <form id="formImport" onsubmit="return enviarPreview(event)" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input type="file" id="arquivo" accept=".ofx,.qfx,.csv,.txt" required
+                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--surface)">
+            <select id="origem" required style="padding:8px 10px">{origem_options}</select>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft)">
+              <input type="checkbox" id="inverter" style="width:15px;height:15px;accent-color:var(--accent)">
+              Inverter sinal (+/−)
+            </label>
+            <button type="submit">Ver prévia</button>
+          </form>
+          <div id="msg" style="margin-top:12px;font-size:13px"></div>
+        </div>
+
+        <div id="blocoPreview" style="display:none">
+          <div class="cards" id="resumoPreview"></div>
+          <div class="cat-breakdown">
+            <h3>2. Confira e importe</h3>
+            <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+              Linhas marcadas como <strong>já existe</strong> vêm desmarcadas — são lançamentos que já estão no
+              sistema com a mesma data e o mesmo valor. Se o sinal estiver invertido (despesa como entrada),
+              marque "Inverter sinal" e gere a prévia de novo.
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+              <button type="button" class="ver-btn" onclick="marcarTodos(true)">Marcar todos</button>
+              <button type="button" class="ver-btn" onclick="marcarTodos(false)">Desmarcar todos</button>
+              <button type="button" class="ver-btn" onclick="marcarSomenteNovos()">Só os novos</button>
+              <button type="button" id="btnImportar" onclick="confirmarImport()" style="margin-left:auto">Importar selecionados</button>
+            </div>
+            <table class="compacta">
+              <thead><tr>
+                <th class="cel-check">Imp</th><th class="cel-data">Data</th><th class="cel-desc">Descrição</th>
+                <th class="cel-valor" style="text-align:right">Valor</th><th class="cel-origem">Situação</th>
+              </tr></thead>
+              <tbody id="corpoPreview"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        let itensPreview = [];
+        function fmtMoeda(v) {{
+          return 'R$ ' + Number(v).toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+        }}
+        function enviarPreview(e) {{
+          e.preventDefault();
+          const arq = document.getElementById('arquivo').files[0];
+          if (!arq) return false;
+          const msg = document.getElementById('msg');
+          msg.textContent = 'Lendo arquivo...';
+          msg.style.color = 'var(--ink-soft)';
+          const fd = new FormData();
+          fd.append('arquivo', arq);
+          fd.append('origem', document.getElementById('origem').value);
+          fd.append('inverter', document.getElementById('inverter').checked ? '1' : '0');
+          fetch('/api/importar/preview', {{ method: 'POST', body: fd }})
+            .then(r => r.json())
+            .then(d => {{
+              if (!d.ok) {{ msg.textContent = d.erro; msg.style.color = 'var(--bad)'; return; }}
+              msg.textContent = d.total + ' lançamentos lidos (' + d.periodo + ').';
+              msg.style.color = 'var(--good)';
+              itensPreview = d.itens;
+              renderPreview(d);
+            }})
+            .catch(() => {{ msg.textContent = 'Falha ao ler o arquivo.'; msg.style.color = 'var(--bad)'; }});
+          return false;
+        }}
+        function renderPreview(d) {{
+          document.getElementById('resumoPreview').innerHTML =
+            '<div class="card"><div class="label">Lidos</div><div class="val">' + d.total + '</div></div>' +
+            '<div class="card"><div class="label">Novos</div><div class="val" style="color:var(--good)">' + d.novos + '</div></div>' +
+            '<div class="card"><div class="label">Já existem</div><div class="val" style="color:var(--ink-faint)">' + d.duplicados + '</div></div>' +
+            '<div class="card"><div class="label">Período</div><div class="val" style="font-size:15px">' + d.periodo + '</div></div>';
+          document.getElementById('corpoPreview').innerHTML = d.itens.map((it, i) => (
+            '<tr' + (it.duplicado ? ' style="color:var(--ink-faint)"' : '') + '>' +
+              '<td class="cel-check"><input type="checkbox" data-i="' + i + '"' + (it.duplicado ? '' : ' checked') + '></td>' +
+              '<td class="cel-data">' + it.data_fmt + '</td>' +
+              '<td class="cel-desc" title="' + it.descricao.replace(/"/g, '&quot;') + '">' + it.descricao + '</td>' +
+              '<td class="valor cel-valor" style="' + (it.valor < 0 ? 'color:var(--good)' : '') + '">' + fmtMoeda(it.valor) + '</td>' +
+              '<td class="cel-origem">' + (it.duplicado ? 'já existe' : 'novo') + '</td>' +
+            '</tr>'
+          )).join('');
+          document.getElementById('blocoPreview').style.display = 'block';
+        }}
+        function marcarTodos(v) {{
+          document.querySelectorAll('#corpoPreview input[type=checkbox]').forEach(cb => cb.checked = v);
+        }}
+        function marcarSomenteNovos() {{
+          document.querySelectorAll('#corpoPreview input[type=checkbox]').forEach(cb => {{
+            cb.checked = !itensPreview[cb.dataset.i].duplicado;
+          }});
+        }}
+        function confirmarImport() {{
+          const sel = Array.from(document.querySelectorAll('#corpoPreview input[type=checkbox]:checked'))
+                           .map(cb => itensPreview[cb.dataset.i]);
+          if (!sel.length) {{ alert('Nenhuma linha selecionada.'); return; }}
+          if (!confirm('Importar ' + sel.length + ' lançamento(s)?')) return;
+          const btn = document.getElementById('btnImportar');
+          btn.disabled = true; btn.textContent = 'Importando...';
+          fetch('/api/importar/confirmar', {{
+            method: 'POST', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{ origem: document.getElementById('origem').value, itens: sel }})
+          }}).then(r => r.json()).then(d => {{
+            btn.disabled = false; btn.textContent = 'Importar selecionados';
+            if (!d.ok) {{ alert(d.erro || 'Falha ao importar.'); return; }}
+            const msg = document.getElementById('msg');
+            msg.style.color = 'var(--good)';
+            msg.textContent = d.inseridos + ' lançamento(s) importado(s).' +
+              (d.ignorados ? ' ' + d.ignorados + ' já existiam e foram ignorados.' : '');
+            document.getElementById('blocoPreview').style.display = 'none';
+          }}).catch(() => {{
+            btn.disabled = false; btn.textContent = 'Importar selecionados';
+            alert('Falha ao importar.');
+          }});
+        }}
+      </script>
+    </body></html>
+    """
 
 
 @app.route("/health")
