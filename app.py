@@ -443,6 +443,9 @@ def migrate():
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
+        # marca lancamentos que entraram por importacao de arquivo (nao vieram do Pluggy),
+        # para permitir exclui-los sem risco de "ressuscitarem" numa sincronizacao
+        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS importado boolean DEFAULT false;")
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
@@ -1038,7 +1041,8 @@ def index():
         "SELECT t.transacao_id, t.account_id, data_transacao, descricao, categoria, "
         "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
         "status, t.tipo, numero_cartao_final, parcela_atual, parcela_total, "
-        "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada "
+        "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada, "
+        "COALESCE(importado, false) AS importado "
         "FROM cartao.transacao t WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
         params,
     )
@@ -1155,7 +1159,8 @@ def index():
         desc = r["descricao"] or ""
 
         conta_info = contas_by_id.get(str(r["account_id"]))
-        eh_manual = conta_info and conta_info["tipo"] == "MANUAL"
+        # manual (dinheiro) ou importado de arquivo: pode ser excluido pelo modal
+        eh_manual = bool((conta_info and conta_info["tipo"] == "MANUAL") or r["importado"])
         eh_nao_credito = conta_info and conta_info["tipo"] != "CREDIT"
         # cartao de credito: exibicao tradicional (sem sinal). conta corrente/manual: entrada/saida
         if eh_nao_credito:
@@ -1304,7 +1309,7 @@ def index():
           </div>
           <div id="modalAcoes" style="margin-top:14px;display:none">
             <button type="button" class="btn-perigo" onclick="excluirManual()">Excluir lançamento</button>
-            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais podem ser excluídos.</div>
+            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais ou importados de arquivo podem ser excluídos.</div>
           </div>
         </div>
       </div>
@@ -1602,13 +1607,13 @@ def lancamento_manual():
 @app.route("/api/lancamento-manual/<transacao_id>", methods=["DELETE"])
 @login_required
 def excluir_lancamento_manual(transacao_id):
-    """Exclui um lancamento manual. Transacoes vindas do Pluggy nunca sao apagadas
-    (elas voltariam na proxima sincronizacao, entao so faz sentido apagar as manuais)."""
+    """Exclui um lancamento criado manualmente ou importado de arquivo. Transacoes vindas do
+    Pluggy nunca sao apagadas (elas voltariam na proxima sincronizacao)."""
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT account_id FROM cartao.transacao WHERE transacao_id = %s;",
+            "SELECT account_id, COALESCE(importado, false) FROM cartao.transacao WHERE transacao_id = %s;",
             (transacao_id,),
         )
         row = cur.fetchone()
@@ -1616,12 +1621,12 @@ def excluir_lancamento_manual(transacao_id):
             cur.close()
             conn.close()
             return jsonify({"ok": False, "erro": "Lançamento não encontrado."}), 404
-        if str(row[0]) != CONTA_MANUAL_ID:
+        if str(row[0]) != CONTA_MANUAL_ID and not row[1]:
             cur.close()
             conn.close()
             return jsonify({
                 "ok": False,
-                "erro": "Só é possível excluir lançamentos manuais. Lançamentos sincronizados do banco voltariam na próxima sincronização — marque como duplicada se quiser ignorá-lo.",
+                "erro": "Só é possível excluir lançamentos manuais ou importados de arquivo. Este veio da sincronização com o banco e voltaria na próxima atualização — marque como duplicada se quiser ignorá-lo.",
             }), 400
 
         cur.execute("DELETE FROM cartao.transacao_dimensao WHERE transacao_id = %s;", (str(transacao_id),))
@@ -3107,8 +3112,8 @@ def importar_confirmar():
             cur.execute(
                 "INSERT INTO cartao.transacao ("
                 "transacao_id, account_id, descricao, descricao_bruta, valor_original, moeda_original, "
-                "valor_brl, data_transacao, status, tipo, criado_em, atualizado_em, sincronizado_em"
-                ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,'POSTED',%s, now(), now(), now()) "
+                "valor_brl, data_transacao, status, tipo, importado, criado_em, atualizado_em, sincronizado_em"
+                ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,'POSTED',%s, true, now(), now(), now()) "
                 "ON CONFLICT (transacao_id) DO NOTHING;",
                 (tid, account_id, desc, desc, valor, valor,
                  f"{data.isoformat()} 12:00:00-03:00", it.get("tipo") or "DEBIT"),
