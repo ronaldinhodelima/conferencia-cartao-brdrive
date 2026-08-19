@@ -562,6 +562,8 @@ def migrate():
         # natureza definida no proprio lancamento, quando ele foge do padrao da categoria
         # (ex: um PIX de R$ 98 mil que foi a compra de um terreno, e nao consumo)
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS natureza text;")
+        # renomeia a dimensao antiga (nao roda de novo depois de renomeada)
+        cur.execute("UPDATE cartao.dimensao SET nome = 'Projeto' WHERE nome = 'Projeto / Evento';")
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
@@ -704,7 +706,7 @@ def migrate():
             for nome in ("Ronaldo", "Andrea", "Amanda", "Compartilhado"):
                 cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (resp_id, nome))
 
-            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Projeto / Evento', false, 2) RETURNING id;")
+            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Projeto', false, 2) RETURNING id;")
             proj_id = cur.fetchone()[0]
             for nome in ("Geral", "Viagem Chile 2027"):
                 cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (proj_id, nome))
@@ -976,7 +978,10 @@ BASE_CSS = """
   .dropdown-content a { display: block; padding: 10px 14px; color: var(--ink-soft); text-decoration: none; font-size: 13px; }
   .dropdown-content a:hover { background: var(--bg); color: var(--ink); }
   .dropdown-content a.ativo { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .dropdown:hover .dropdown-content, .dropdown:focus-within .dropdown-content { display: block; }
+  /* abre por clique (classe .aberto), nao por hover/focus: com :focus-within o menu
+     ficava preso aberto depois de clicar, exigindo dois cliques para reabrir */
+  .dropdown.aberto .dropdown-content { display: block; }
+  .dropdown.aberto .dropbtn { color: var(--ink); }
 
   .multisel { padding: 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); min-width: 170px; font-size: 13px; }
 
@@ -1045,11 +1050,16 @@ def topbar_html(titulo, ativo=None):
         <div>{titulo} - {session.get('user')}</div>
         <div class="nav-menu">
           <a href="/" class="{cls('inicio')}">Lançamentos</a>
-          <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
-          <div class="dropdown" tabindex="0">
-            <button class="dropbtn">Configurações ▾</button>
+          <div class="dropdown">
+            <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Relatórios ▾</button>
             <div class="dropdown-content">
+              <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
               <a href="/dre" class="{cls('dre')}">DRE / Centro de Custos</a>
+            </div>
+          </div>
+          <div class="dropdown">
+            <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
+            <div class="dropdown-content">
               <a href="/naturezas" class="{cls('naturezas')}">Natureza das categorias</a>
               <a href="/grupos" class="{cls('grupos')}">Gerenciar grupos</a>
               <a href="/dimensoes" class="{cls('dimensoes')}">Gerenciar dimensões</a>
@@ -1067,6 +1077,24 @@ def topbar_html(titulo, ativo=None):
         </div>
       </div>
       <script>
+        // menu do topo: abre/fecha no clique e fecha ao clicar fora ou apertar Esc
+        function menuToggle(e, btn) {{
+          e.stopPropagation();
+          const drop = btn.closest('.dropdown');
+          const abrir = !drop.classList.contains('aberto');
+          document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
+          if (abrir) drop.classList.add('aberto');
+          btn.blur();
+        }}
+        document.addEventListener('click', function(e) {{
+          if (!e.target.closest('.dropdown')) {{
+            document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
+          }}
+        }});
+        document.addEventListener('keydown', function(e) {{
+          if (e.key === 'Escape') document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
+        }});
+
         function syncEhSucesso(status) {{
           if (!status) return false;
           const s = String(status).toLowerCase();
