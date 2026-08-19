@@ -69,11 +69,97 @@ CATEGORIA_PT = {
     "Viagem": "Viagem",
 }
 
-# categorias que não representam gasto real (usadas para excluir do resumo)
-CATEGORIAS_NAO_GASTO = ("Credit card payment", "Interests charged", "Credit card fees", "Transfer - Internal")
+# mantido apenas por compatibilidade com bases antigas; a regra de gasto real
+# passou a ser a natureza da categoria (ver NATUREZAS mais abaixo)
+CATEGORIAS_NAO_GASTO = ("Credit card payment", "Transfer - Internal")
 
 # categorias extras disponiveis no dropdown mesmo que ainda nao tenham sido usadas em nenhuma transacao
-CATEGORIAS_EXTRA = ("BRDrive", "Agua / Gas", "Natacao", "Academia", "Viagem")
+CATEGORIAS_EXTRA = (
+    "BRDrive", "Agua / Gas", "Natacao", "Academia", "Viagem",
+    "Imóveis / Terrenos", "Veículos / Bens",
+)
+
+# ---------------------------------------------------------------------------
+# Natureza de cada categoria - base do DRE.
+#
+# O DRE mede o RESULTADO do periodo: Receitas - Despesas. Nem todo dinheiro que
+# sai e despesa: comprar um terreno ou aplicar dinheiro nao empobrece ninguem,
+# apenas troca a forma do patrimonio, e por isso NAO entra no resultado (vai
+# para o balanco patrimonial). O mesmo vale para pagar a fatura do cartao, que
+# so move dinheiro da conta para o cartao - a despesa ja foi contada na compra.
+#
+#   receita       - entra e aumenta o patrimonio (salario, PIX recebido)
+#   despesa       - sai e reduz o patrimonio (consumo, juros, tarifas)
+#   investimento  - troca dinheiro por aplicacao financeira (neutro no resultado)
+#   bem           - troca dinheiro por bem: terreno, veiculo, imovel (neutro)
+#   transferencia - so troca de bolso: fatura, conta propria (neutro)
+#   fluxo         - a direcao decide: entrada = receita, saida = despesa
+# ---------------------------------------------------------------------------
+NATUREZAS = {
+    "receita": "Receita",
+    "despesa": "Despesa",
+    "investimento": "Investimento",
+    "bem": "Aquisição de bem",
+    "transferencia": "Transferência",
+    "fluxo": "Depende da direção",
+}
+NATUREZA_PADRAO = "despesa"
+
+# naturezas que nao afetam o resultado do periodo
+NATUREZAS_NEUTRAS = ("investimento", "bem", "transferencia")
+
+SEED_NATUREZAS = {
+    # so movem dinheiro de lugar - nunca sao despesa
+    "Credit card payment": "transferencia",
+    "Transfer - Internal": "transferencia",
+    "Same person transfer": "transferencia",
+    "Same person transfer - CASH": "transferencia",
+    "Same person transfer - PIX": "transferencia",
+    "Same person transfer - TED": "transferencia",
+    "Same person transfer - DOC": "transferencia",
+    "Same person transfer - Bank Slip": "transferencia",
+    # na base do Ronaldo isto veio do Pluggy como financiamento, mas e o
+    # pagamento da fatura do cartao de marco/2026 (bate com o valor da fatura)
+    "Loans and financing": "transferencia",
+
+    # poupanca de longo prazo - sai do resultado, entra no bloco de investimentos
+    "Investments": "investimento",
+    "Automatic investment": "investimento",
+    "Pension": "investimento",
+    "Fixed income": "investimento",
+    "Variable income": "investimento",
+    "Savings": "investimento",
+
+    # aquisicao de bem - nao e despesa, e troca de ativo
+    "Imóveis / Terrenos": "bem",
+    "Veículos / Bens": "bem",
+
+    # a direcao define: o que entra e receita, o que sai e despesa
+    "Transfer - PIX": "fluxo",
+    "Transfer - TED": "fluxo",
+    "Transfer - DOC": "fluxo",
+    "Transfer - Bank Slip": "fluxo",
+    "Transfer - Cash": "fluxo",
+    "Transfers": "fluxo",
+    "Third party transfers": "fluxo",
+
+    # entradas
+    "Income": "receita",
+    "Salary": "receita",
+    "Government aid": "receita",
+    "Interest income": "receita",
+    "Dividends": "receita",
+
+    # custo financeiro real: dinheiro que saiu de fato
+    "Interests charged": "despesa",
+    "Credit card fees": "despesa",
+    "Tax on financial operations": "despesa",
+}
+
+# categorias que, por padrao, nao entram em centro de custo (nao sao despesa)
+CATEGORIAS_NEUTRAS_PADRAO = {
+    c for c, n in SEED_NATUREZAS.items() if n in NATUREZAS_NEUTRAS
+}
 
 # dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
 FATURA_DIA_FECHAMENTO = 12
@@ -82,6 +168,26 @@ FATURA_DIA_FECHAMENTO = 12
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
 MESES_ABREV = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
+
+# ---- expressoes SQL reutilizaveis (exigem JOIN com cartao.conta c e LEFT JOIN categoria_natureza n)
+JOIN_NATUREZA = (
+    " JOIN cartao.conta c ON c.account_id = t.account_id "
+    " LEFT JOIN cartao.categoria_natureza n ON n.categoria = t.categoria "
+)
+
+# valor com o sinal do ponto de vista de DESPESA (positivo = dinheiro saiu).
+# No cartao a compra vem positiva; na conta corrente a saida vem negativa.
+VAL_DESPESA = (
+    "(CASE WHEN c.tipo = 'CREDIT' THEN COALESCE(t.valor_brl, t.valor_original) "
+    "ELSE -COALESCE(t.valor_brl, t.valor_original) END)"
+)
+
+# natureza efetiva: resolve 'fluxo' pela direcao do lancamento
+NATUREZA_SQL = (
+    "(CASE WHEN COALESCE(n.natureza, '" + NATUREZA_PADRAO + "') = 'fluxo' "
+    "THEN (CASE WHEN " + VAL_DESPESA + " > 0 THEN 'despesa' ELSE 'receita' END) "
+    "ELSE COALESCE(n.natureza, '" + NATUREZA_PADRAO + "') END)"
+)
 
 
 # nomes de banco reconhecidos dentro do nome da conta/instituicao retornado pelo Pluggy
@@ -488,6 +594,18 @@ def migrate():
             "categoria text PRIMARY KEY, "
             "subgrupo_id integer REFERENCES cartao.subgrupo_custo(id) ON DELETE SET NULL);"
         )
+        # natureza de cada categoria (base do DRE). ON CONFLICT DO NOTHING para
+        # nunca sobrescrever uma classificacao que o usuario tenha ajustado.
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.categoria_natureza ("
+            "categoria text PRIMARY KEY, natureza text NOT NULL DEFAULT 'despesa');"
+        )
+        for categoria, natureza in SEED_NATUREZAS.items():
+            cur.execute(
+                "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                "ON CONFLICT (categoria) DO NOTHING;",
+                (categoria, natureza),
+            )
         conn.commit()
 
         # seed inicial de grupos/subgrupos (so roda se a tabela grupo_custo estiver vazia)
@@ -512,6 +630,28 @@ def migrate():
                             "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
                             (categoria, subgrupo_id),
                         )
+            conn.commit()
+
+        # juros e tarifas passaram a contar como despesa real: garante o grupo
+        # "Despesas Financeiras" tambem nas bases que ja tinham sido semeadas
+        cur.execute("SELECT id FROM cartao.grupo_custo WHERE nome = 'Despesas Financeiras';")
+        row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "INSERT INTO cartao.grupo_custo (nome) VALUES ('Despesas Financeiras') RETURNING id;"
+            )
+            grupo_fin_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s, 'Juros & Tarifas') RETURNING id;",
+                (grupo_fin_id,),
+            )
+            sub_fin_id = cur.fetchone()[0]
+            for categoria in ("Interests charged", "Credit card fees", "Tax on financial operations"):
+                cur.execute(
+                    "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                    "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                    (categoria, sub_fin_id),
+                )
             conn.commit()
 
         # dimensoes adicionais (ex: Responsavel, Projeto/Evento) - independentes do Centro de Custo
@@ -635,6 +775,9 @@ SEED_GRUPOS = [
     ]),
     ("Negócios", None, None, [
         ("BRDrive", None, None, ["BRDrive"]),
+    ]),
+    ("Despesas Financeiras", None, None, [
+        ("Juros & Tarifas", None, None, ["Interests charged", "Credit card fees", "Tax on financial operations"]),
     ]),
 ]
 
@@ -899,6 +1042,7 @@ def topbar_html(titulo, ativo=None):
             <button class="dropbtn">Configurações ▾</button>
             <div class="dropdown-content">
               <a href="/dre" class="{cls('dre')}">DRE / Centro de Custos</a>
+              <a href="/naturezas" class="{cls('naturezas')}">Natureza das categorias</a>
               <a href="/grupos" class="{cls('grupos')}">Gerenciar grupos</a>
               <a href="/dimensoes" class="{cls('dimensoes')}">Gerenciar dimensões</a>
               <a href="/regras" class="{cls('regras')}">Regras automáticas</a>
@@ -1056,24 +1200,26 @@ def index():
     if origem_sel:
         where_resumo.append("t.account_id IN %s")
         params_resumo.append(tuple(origem_sel))
+    # gasto real = so o que tem natureza de despesa (fatura, transferencia,
+    # investimento e compra de bem nao sao gasto - ver NATUREZAS)
     cur.execute(
         "SELECT COUNT(*) total, SUM(CASE WHEN conferida THEN 1 ELSE 0 END) conferidas, "
-        "SUM(CASE WHEN categoria NOT IN %s THEN COALESCE(valor_brl, valor_original) ELSE 0 END) AS gasto_real, "
-        "SUM(COALESCE(valor_brl, valor_original)) AS total_bruto "
-        "FROM cartao.transacao t WHERE " + " AND ".join(where_resumo) + ";",
-        [CATEGORIAS_NAO_GASTO] + params_resumo,
+        f"SUM(CASE WHEN {NATUREZA_SQL} = 'despesa' THEN {VAL_DESPESA} ELSE 0 END) AS gasto_real, "
+        f"SUM(CASE WHEN {NATUREZA_SQL} = 'receita' THEN -{VAL_DESPESA} ELSE 0 END) AS receita_mes "
+        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where_resumo) + ";",
+        params_resumo,
     )
     resumo = cur.fetchone()
 
-    where_cat = ["to_char(data_transacao,'YYYY-MM') = %s", "categoria NOT IN %s",
+    where_cat = ["to_char(data_transacao,'YYYY-MM') = %s", f"{NATUREZA_SQL} = 'despesa'",
                  "categoria IS NOT NULL", "COALESCE(duplicada, false) = false"]
-    params_cat = [mes, CATEGORIAS_NAO_GASTO]
+    params_cat = [mes]
     if origem_sel:
         where_cat.append("t.account_id IN %s")
         params_cat.append(tuple(origem_sel))
     cur.execute(
-        "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
-        "FROM cartao.transacao t WHERE " + " AND ".join(where_cat) +
+        f"SELECT categoria, SUM({VAL_DESPESA}) AS total "
+        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where_cat) +
         " GROUP BY categoria ORDER BY total DESC LIMIT 8;",
         params_cat,
     )
@@ -1221,6 +1367,9 @@ def index():
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
+    receita_mes = resumo["receita_mes"] or 0
+    resultado_mes = receita_mes - gasto_real
+    cor_resultado = "#1f8a53" if resultado_mes >= 0 else "#c23c34"
     colspan_total = 8 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
     dim_headers = "".join(f'<th class="cel-dim">{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
@@ -1275,8 +1424,9 @@ def index():
         </div>
 
         <div class="cards">
-          <div class="card"><div class="label" title="Gasto real do mês">Gasto real do mês</div><div class="val">R$ {gasto_real:,.2f}</div></div>
-          <div class="card"><div class="label" title="Lançamentos">Lançamentos</div><div class="val">{total}</div></div>
+          <div class="card"><div class="label" title="Receitas do mês">Receitas do mês</div><div class="val" style="color:#1f8a53">R$ {receita_mes:,.2f}</div></div>
+          <div class="card"><div class="label" title="Despesas do mês">Despesas do mês</div><div class="val" style="color:#c23c34">R$ {gasto_real:,.2f}</div></div>
+          <div class="card"><div class="label" title="Resultado do mês (receitas menos despesas)">Resultado do mês</div><div class="val" style="color:{cor_resultado}">R$ {resultado_mes:,.2f}</div></div>
           <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{conf} / {total}</div></div>
           <div class="card"><div class="label" title="Fechamento da fatura">Fechamento fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div class="sub">Próx: {proximo_fechamento.strftime('%d/%m/%y')}</div></div>
           <div class="card"><div class="label" title="Vencimento da fatura">Vencimento fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div class="sub">{'Próx: ' + proximo_vencimento.strftime('%d/%m/%y') if proximo_vencimento else ''}</div></div>
@@ -2016,7 +2166,7 @@ def regras_view():
     total_aplicadas = cur.fetchone()["n"]
 
     todas_categorias = sorted(
-        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - set(CATEGORIAS_NAO_GASTO),
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
         key=lambda c: cat_pt(c).lower(),
     )
 
@@ -2163,25 +2313,43 @@ def dre():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    base = f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE COALESCE(t.duplicada, false) = false "
+
     cur.execute(
-        "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
-        "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY') = %s "
-        "AND COALESCE(duplicada, false) = false AND categoria NOT IN %s AND categoria IS NOT NULL "
-        "GROUP BY categoria;",
-        (ano, CATEGORIAS_NAO_GASTO),
+        f"SELECT t.categoria, SUM({VAL_DESPESA}) AS total {base} "
+        f"AND to_char(t.data_transacao,'YYYY') = %s AND {NATUREZA_SQL} = 'despesa' "
+        "AND t.categoria IS NOT NULL GROUP BY t.categoria;",
+        (ano,),
     )
     anual_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
 
     mensal_por_cat = {}
     if eh_ano_atual:
         cur.execute(
-            "SELECT categoria, SUM(COALESCE(valor_brl, valor_original)) AS total "
-            "FROM cartao.transacao WHERE to_char(data_transacao,'YYYY-MM') = %s "
-            "AND COALESCE(duplicada, false) = false AND categoria NOT IN %s AND categoria IS NOT NULL "
-            "GROUP BY categoria;",
-            (mes_atual_str, CATEGORIAS_NAO_GASTO),
+            f"SELECT t.categoria, SUM({VAL_DESPESA}) AS total {base} "
+            f"AND to_char(t.data_transacao,'YYYY-MM') = %s AND {NATUREZA_SQL} = 'despesa' "
+            "AND t.categoria IS NOT NULL GROUP BY t.categoria;",
+            (mes_atual_str,),
         )
         mensal_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
+
+    # ---- DRE propriamente dito: receitas, despesas e resultado de cada mes do ano ----
+    cur.execute(
+        f"SELECT to_char(t.data_transacao,'YYYY-MM') AS mes, {NATUREZA_SQL} AS natureza, "
+        f"SUM({VAL_DESPESA}) AS total {base} AND to_char(t.data_transacao,'YYYY') = %s "
+        f"GROUP BY 1, 2 ORDER BY 1;",
+        (ano,),
+    )
+    meses_dre = {}
+    for r in cur.fetchall():
+        m = meses_dre.setdefault(r["mes"], {"receita": 0.0, "despesa": 0.0, "investimento": 0.0, "bem": 0.0})
+        v = float(r["total"] or 0)
+        if r["natureza"] == "receita":
+            m["receita"] += -v          # receita entra: VAL_DESPESA e negativo
+        elif r["natureza"] == "despesa":
+            m["despesa"] += v
+        elif r["natureza"] in ("investimento", "bem"):
+            m[r["natureza"]] += v       # positivo = dinheiro aplicado/investido no bem
 
     cur.execute(
         "SELECT g.id AS grupo_id, g.nome AS grupo_nome, g.teto_mensal AS g_teto_mensal, g.teto_anual AS g_teto_anual, "
@@ -2200,14 +2368,14 @@ def dre():
     for d in dims:
         cur.execute(
             "SELECT COALESCE(dv.nome, '(nao definido)') AS nome, "
-            "SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-            "FROM cartao.transacao t "
+            f"SUM({VAL_DESPESA}) AS total "
+            f"FROM cartao.transacao t {JOIN_NATUREZA} "
             "LEFT JOIN cartao.transacao_dimensao td ON td.transacao_id = t.transacao_id::text AND td.dimensao_id = %s "
             "LEFT JOIN cartao.dimensao_valor dv ON dv.id = td.valor_id "
             "WHERE to_char(t.data_transacao,'YYYY') = %s AND COALESCE(t.duplicada, false) = false "
-            "AND t.categoria NOT IN %s AND t.categoria IS NOT NULL "
+            f"AND {NATUREZA_SQL} = 'despesa' AND t.categoria IS NOT NULL "
             "GROUP BY dv.nome ORDER BY total DESC;",
-            (d["id"], ano, CATEGORIAS_NAO_GASTO),
+            (d["id"], ano),
         )
         por_dimensao.append({"nome": d["nome"], "linhas": cur.fetchall()})
 
@@ -2309,6 +2477,33 @@ def dre():
         for a in range(hoje.year - 3, hoje.year + 1)
     )
 
+    # ---- tabela do DRE: um mes por linha, do mais recente para o mais antigo ----
+    rec_ano = sum(m["receita"] for m in meses_dre.values())
+    desp_ano = sum(m["despesa"] for m in meses_dre.values())
+    inv_ano = sum(m["investimento"] + m["bem"] for m in meses_dre.values())
+    resultado_ano = rec_ano - desp_ano
+
+    def _cor(v):
+        return "#1f8a53" if v >= 0 else "#c23c34"
+
+    linhas_dre = []
+    for mes_key in sorted(meses_dre, reverse=True):
+        m = meses_dre[mes_key]
+        res = m["receita"] - m["despesa"]
+        inv = m["investimento"] + m["bem"]
+        margem = (res / m["receita"] * 100) if m["receita"] else 0
+        linhas_dre.append(
+            f'<tr>'
+            f'<td>{MESES_ABREV[int(mes_key[5:7]) - 1]}/{mes_key[2:4]}</td>'
+            f'<td class="valor" style="color:#1f8a53">{_fmt_moeda(m["receita"])}</td>'
+            f'<td class="valor" style="color:#c23c34">{_fmt_moeda(m["despesa"])}</td>'
+            f'<td class="valor" style="color:{_cor(res)};font-weight:600">{_fmt_moeda(res)}</td>'
+            f'<td class="valor" style="color:#5c5f66">{("%.0f%%" % margem) if m["receita"] else "-"}</td>'
+            f'<td class="valor" style="color:#5c5f66">{_fmt_moeda(inv) if inv else "-"}</td>'
+            f'</tr>'
+        )
+    corpo_dre = "".join(linhas_dre) or '<tr><td colspan="6" style="padding:18px;text-align:center;color:#888">Sem lançamentos neste ano.</td></tr>'
+
     return f"""
     <html><head><title>DRE / Centro de Custos</title>{BASE_CSS}</head>
     <body>
@@ -2319,7 +2514,38 @@ def dre():
             <label>Ano</label>
             <select onchange="window.location='/dre?ano='+this.value">{anos_opcoes}</select>
           </div>
-          <div style="margin-left:auto;font-size:14px"><strong>Total do ano: {_fmt_moeda(total_geral_anual)}</strong></div>
+        </div>
+
+        <div class="cards">
+          <div class="card"><div class="label">Receitas do ano</div><div class="val" style="color:#1f8a53">{_fmt_moeda(rec_ano)}</div></div>
+          <div class="card"><div class="label">Despesas do ano</div><div class="val" style="color:#c23c34">{_fmt_moeda(desp_ano)}</div></div>
+          <div class="card"><div class="label">Resultado do ano</div><div class="val" style="color:{_cor(resultado_ano)}">{_fmt_moeda(resultado_ano)}</div></div>
+          <div class="card"><div class="label">Investido / bens</div><div class="val" style="color:#5c5f66">{_fmt_moeda(inv_ano)}</div></div>
+        </div>
+
+        <div class="cat-breakdown">
+          <h3>Resultado mês a mês</h3>
+          <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+            <strong>Resultado = Receitas − Despesas.</strong> Investimentos, compra de bens (terreno, veículo),
+            pagamento de fatura e transferências entre contas próprias <strong>não são despesa</strong> —
+            não empobrecem, apenas mudam a forma do patrimônio. Por isso ficam de fora do resultado e
+            aparecem na última coluna. Já os juros e tarifas <strong>são despesa</strong>, porque o dinheiro sai e não volta.
+          </div>
+          <table class="compacta">
+            <thead><tr>
+              <th>Mês</th>
+              <th style="text-align:right">Receitas</th>
+              <th style="text-align:right">Despesas</th>
+              <th style="text-align:right">Resultado</th>
+              <th style="text-align:right" title="Quanto sobrou de cada R$ 100 recebidos">Margem</th>
+              <th style="text-align:right" title="Aplicações financeiras e compra de bens no mês">Investido / bens</th>
+            </tr></thead>
+            <tbody>{corpo_dre}</tbody>
+          </table>
+        </div>
+
+        <div style="font-size:13px;color:var(--ink-soft);margin:22px 0 10px 0">
+          <strong>Despesas por centro de custo</strong> — abaixo, só o que é consumo de fato.
         </div>
         {"".join(blocos_dimensao)}
         {"".join(blocos)}
@@ -2450,7 +2676,7 @@ def grupos_view():
         return "".join(opts)
 
     todas_categorias = sorted(
-        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - set(CATEGORIAS_NAO_GASTO),
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
         key=lambda c: cat_pt(c).lower(),
     )
     categorias_rows = "".join(
@@ -2513,16 +2739,26 @@ def _montar_filtro_relatorio(dimensoes):
         if vals:
             dim_sel[d["id"]] = vals
 
+    # visao do relatorio: o que estamos medindo. Por padrao, despesas (consumo real).
+    # Investimentos, aquisicao de bens e transferencias NAO sao despesa - ver NATUREZAS.
+    visao = request.args.get("visao") or "despesa"
+    if visao not in ("despesa", "receita", "investimento", "tudo"):
+        visao = "despesa"
+
     where = ["COALESCE(t.duplicada, false) = false"]
     params = []
+    if visao == "despesa":
+        where.append(NATUREZA_SQL + " = 'despesa'")
+    elif visao == "receita":
+        where.append(NATUREZA_SQL + " = 'receita'")
+    elif visao == "investimento":
+        where.append(NATUREZA_SQL + " IN ('investimento', 'bem')")
+    else:  # tudo: mostra o fluxo de caixa completo, menos o que so troca de bolso
+        where.append(NATUREZA_SQL + " <> 'transferencia'")
+
     if categorias_sel:
         where.append("t.categoria IN %s")
         params.append(tuple(categorias_sel))
-    else:
-        # sem filtro explicito de categoria: exclui por padrao o que nao e gasto real
-        # (pagamento de fatura, juros, tarifas, transferencia interna) para o total fazer sentido
-        where.append("(t.categoria NOT IN %s OR t.categoria IS NULL)")
-        params.append(CATEGORIAS_NAO_GASTO)
     if cartoes_sel:
         where.append("t.numero_cartao_final IN %s")
         params.append(tuple(cartoes_sel))
@@ -2564,6 +2800,10 @@ def _montar_filtro_relatorio(dimensoes):
         agrupar = "categoria"
         group_expr = "t.categoria"
 
+    # valor somado conforme a visao: na visao de receita invertemos o sinal para
+    # que entrada apareca positiva (VAL_DESPESA e positivo quando o dinheiro sai)
+    soma_expr = f"-{VAL_DESPESA}" if visao == "receita" else VAL_DESPESA
+
     return {
         "categorias_sel": categorias_sel,
         "cartoes_sel": cartoes_sel,
@@ -2571,11 +2811,14 @@ def _montar_filtro_relatorio(dimensoes):
         "data_ini": data_ini,
         "data_fim": data_fim,
         "agrupar": agrupar,
+        "visao": visao,
         "dim_sel": dim_sel,
         "where_sql": where_sql,
         "params": params,
         "join_extra": join_extra,
+        "join_natureza": JOIN_NATUREZA,
         "group_expr": group_expr,
+        "soma_expr": soma_expr,
     }
 
 
@@ -2639,10 +2882,17 @@ def relatorios():
       {topbar_html('Relatórios', 'relatorios')}
       <div class="wrap">
         <div style="font-size:12px;color:#888;margin-bottom:10px">
-          Por padrão os totais nao incluem pagamento de fatura, juros, tarifas e transferencia interna (nao sao gasto real).
-          Selecione uma categoria especifica para incluir esses lancamentos.
+          Pagamento de fatura, transferência entre contas próprias, aplicações e compra de bens
+          <strong>não são despesa</strong> — só trocam a forma do dinheiro. Por isso ficam fora da visão de Despesas
+          (veja a <a href="/naturezas">classificação de naturezas</a>).
         </div>
         <div class="rel-filtros">
+          <select name="visao" id="selVisao" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">
+            <option value="despesa" {"selected" if cfg["visao"]=="despesa" else ""}>Despesas</option>
+            <option value="receita" {"selected" if cfg["visao"]=="receita" else ""}>Receitas</option>
+            <option value="investimento" {"selected" if cfg["visao"]=="investimento" else ""}>Investimentos e bens</option>
+            <option value="tudo" {"selected" if cfg["visao"]=="tudo" else ""}>Tudo (fluxo de caixa)</option>
+          </select>
           <select name="agrupar" id="selAgrupar" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">{agrupar_opcoes_html}</select>
           {chip_filter('origem', 'Origem', origem_opcoes, cfg["origens_sel"])}
           {chip_filter('categoria', 'Categoria', [(c, cat_pt(c)) for c in todas_categorias], cfg["categorias_sel"])}
@@ -2660,7 +2910,7 @@ def relatorios():
         <div class="chips-sel" id="chipsSel" style="margin:-6px 0 14px 0"></div>
 
         <div class="cards">
-          <div class="card"><div class="label">Total no filtro</div><div class="val" id="totalGeral">-</div></div>
+          <div class="card"><div class="label" id="labelTotal">Total no filtro</div><div class="val" id="totalGeral">-</div></div>
           <div class="card"><div class="label">Lançamentos</div><div class="val" id="qtdGeral">-</div></div>
         </div>
 
@@ -2766,6 +3016,7 @@ def relatorios():
         }}
         function coletarQuery() {{
           const params = new URLSearchParams();
+          params.set('visao', document.getElementById('selVisao').value);
           params.set('agrupar', document.getElementById('selAgrupar').value);
           document.querySelectorAll('.chip-opt input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
           const di = document.getElementById('inputDataIni').value;
@@ -2783,8 +3034,11 @@ def relatorios():
         function carregarDados(params) {{
           fetch('/relatorios/dados?' + params.toString()).then(r => r.json()).then(renderResultado);
         }}
+        const LABEL_VISAO = {{ despesa: 'Total de despesas', receita: 'Total de receitas',
+                              investimento: 'Investido / adquirido', tudo: 'Fluxo de caixa (líquido)' }};
         function renderResultado(data) {{
           document.getElementById('totalGeral').textContent = fmtMoeda(data.total_geral);
+          document.getElementById('labelTotal').textContent = LABEL_VISAO[data.visao] || 'Total no filtro';
           document.getElementById('qtdGeral').textContent = data.qtd_geral;
           const ehPeriodo = data.agrupar === 'mes';
           document.getElementById('graficoTitulo').textContent =
@@ -2928,15 +3182,16 @@ def relatorios_dados():
     # (do mais antigo para o mais recente). Nos demais agrupamentos, maior valor primeiro.
     ordem = f"{cfg['group_expr']} ASC" if cfg["agrupar"] == "mes" else "total DESC"
     cur.execute(
-        f"SELECT {cfg['group_expr']} AS grupo, COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-        f"FROM cartao.transacao t {cfg['join_extra']} WHERE {cfg['where_sql']} GROUP BY {cfg['group_expr']} ORDER BY {ordem};",
+        f"SELECT {cfg['group_expr']} AS grupo, COUNT(*) AS qtd, SUM({cfg['soma_expr']}) AS total "
+        f"FROM cartao.transacao t {cfg['join_natureza']} {cfg['join_extra']} "
+        f"WHERE {cfg['where_sql']} GROUP BY {cfg['group_expr']} ORDER BY {ordem};",
         cfg["params"],
     )
     grupos_raw = cur.fetchall()
 
     cur.execute(
-        f"SELECT COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-        f"FROM cartao.transacao t WHERE {cfg['where_sql']};",
+        f"SELECT COUNT(*) AS qtd, SUM({cfg['soma_expr']}) AS total "
+        f"FROM cartao.transacao t {cfg['join_natureza']} WHERE {cfg['where_sql']};",
         cfg["params"],
     )
     totalizador = cur.fetchone()
@@ -2990,6 +3245,7 @@ def relatorios_dados():
     return jsonify({
         "total_geral": round(total_geral, 2),
         "qtd_geral": qtd_geral,
+        "visao": cfg["visao"],
         "agrupar": cfg["agrupar"],
         "agrupar_label": agrupar_labels.get(cfg["agrupar"], cfg["agrupar"]),
         "grupos": grupos,
@@ -3015,9 +3271,9 @@ def relatorios_lancamentos():
         params.append(request.args.get("valor"))
 
     cur.execute(
-        f"SELECT t.data_transacao, t.descricao, t.categoria, COALESCE(t.valor_brl, t.valor_original) AS valor, "
-        f"t.numero_cartao_final, t.account_id FROM cartao.transacao t {cfg['join_extra']} WHERE {where_sql} "
-        f"ORDER BY t.data_transacao DESC LIMIT 300;",
+        f"SELECT t.data_transacao, t.descricao, t.categoria, {cfg['soma_expr']} AS valor, "
+        f"t.numero_cartao_final, t.account_id FROM cartao.transacao t {cfg['join_natureza']} {cfg['join_extra']} "
+        f"WHERE {where_sql} ORDER BY t.data_transacao DESC LIMIT 300;",
         params,
     )
     rows = cur.fetchall()
@@ -3329,6 +3585,95 @@ def importar_view():
           }});
         }}
       </script>
+    </body></html>
+    """
+
+
+@app.route("/naturezas", methods=["GET", "POST"])
+@login_required
+def naturezas_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    if request.method == "POST":
+        categoria = request.form.get("categoria")
+        natureza = request.form.get("natureza")
+        if categoria and natureza in NATUREZAS:
+            cur.execute(
+                "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                "ON CONFLICT (categoria) DO UPDATE SET natureza = EXCLUDED.natureza;",
+                (categoria, natureza),
+            )
+            conn.commit()
+
+    cur.execute("SELECT categoria, natureza FROM cartao.categoria_natureza;")
+    atual = {r["categoria"]: r["natureza"] for r in cur.fetchall()}
+
+    # so lista categorias que existem de fato nos lancamentos (+ as extras)
+    cur.execute(
+        f"SELECT t.categoria, COUNT(*) AS qtd, SUM({VAL_DESPESA}) AS total "
+        f"FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id "
+        "WHERE t.categoria IS NOT NULL AND COALESCE(t.duplicada, false) = false "
+        "GROUP BY t.categoria;"
+    )
+    usadas = {r["categoria"]: r for r in cur.fetchall()}
+    cur.close()
+    conn.close()
+
+    categorias = sorted(set(usadas) | set(CATEGORIAS_EXTRA) | set(atual), key=lambda c: cat_pt(c).lower())
+
+    def linha(c):
+        nat = atual.get(c, NATUREZA_PADRAO)
+        info = usadas.get(c)
+        qtd = info["qtd"] if info else 0
+        total = float(info["total"] or 0) if info else 0.0
+        opts = "".join(
+            f'<option value="{k}" {"selected" if k == nat else ""}>{v}</option>'
+            for k, v in NATUREZAS.items()
+        )
+        aviso = "" if nat == "despesa" else '<span style="color:var(--ink-faint);font-size:11px"> fora do resultado</span>' if nat in NATUREZAS_NEUTRAS else ""
+        return (
+            f'<tr>'
+            f'<td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{c}</div></td>'
+            f'<td class="valor">{qtd or "-"}</td>'
+            f'<td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>'
+            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
+            f'<input type="hidden" name="categoria" value="{c}">'
+            f'<select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">{opts}</select>'
+            f'{aviso}</form></td>'
+            f'</tr>'
+        )
+
+    return f"""
+    <html><head><title>Naturezas</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Natureza das categorias', 'naturezas')}
+      <div class="wrap">
+        <div class="cat-breakdown">
+          <h3>Como cada categoria entra no DRE</h3>
+          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7">
+            O DRE mede o <strong>resultado</strong> do período: Receitas − Despesas. Nem todo dinheiro que sai é despesa.
+            <ul style="margin:8px 0 0 0;padding-left:18px">
+              <li><strong>Receita</strong> — entra e aumenta seu patrimônio (salário, PIX recebido, depósitos).</li>
+              <li><strong>Despesa</strong> — sai e não volta: consumo, juros, tarifas. É o que reduz o resultado.</li>
+              <li><strong>Investimento</strong> — aplicação financeira, previdência. Você continua com o dinheiro, em outra forma. Não é despesa.</li>
+              <li><strong>Aquisição de bem</strong> — terreno, veículo, imóvel. Troca de dinheiro por bem: não entra no resultado.
+                  O que entraria é a depreciação (e terreno não deprecia).</li>
+              <li><strong>Transferência</strong> — pagamento de fatura do cartão, movimentação entre contas próprias. Só troca de bolso.</li>
+              <li><strong>Depende da direção</strong> — PIX, TED, dinheiro: o que entra vira receita, o que sai vira despesa.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="cat-breakdown">
+          <table class="compacta">
+            <thead><tr>
+              <th>Categoria</th><th style="text-align:right">Lanç.</th>
+              <th style="text-align:right" title="Positivo = dinheiro saiu">Total</th><th>Natureza</th>
+            </tr></thead>
+            <tbody>{"".join(linha(c) for c in categorias)}</tbody>
+          </table>
+        </div>
+      </div>
     </body></html>
     """
 
