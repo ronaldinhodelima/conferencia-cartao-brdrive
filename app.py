@@ -182,11 +182,16 @@ VAL_DESPESA = (
     "ELSE -COALESCE(t.valor_brl, t.valor_original) END)"
 )
 
-# natureza efetiva: resolve 'fluxo' pela direcao do lancamento
+# natureza efetiva de um lancamento, na ordem de prioridade:
+#   1. natureza definida no proprio lancamento (ex: um PIX que foi compra de terreno)
+#   2. natureza da categoria
+#   3. despesa (padrao)
+# 'fluxo' e resolvido pela direcao do dinheiro.
+_NAT_BASE = "COALESCE(t.natureza, n.natureza, '" + NATUREZA_PADRAO + "')"
 NATUREZA_SQL = (
-    "(CASE WHEN COALESCE(n.natureza, '" + NATUREZA_PADRAO + "') = 'fluxo' "
+    "(CASE WHEN " + _NAT_BASE + " = 'fluxo' "
     "THEN (CASE WHEN " + VAL_DESPESA + " > 0 THEN 'despesa' ELSE 'receita' END) "
-    "ELSE COALESCE(n.natureza, '" + NATUREZA_PADRAO + "') END)"
+    "ELSE " + _NAT_BASE + " END)"
 )
 
 
@@ -554,6 +559,9 @@ def migrate():
         # marca lancamentos que entraram por importacao de arquivo (nao vieram do Pluggy),
         # para permitir exclui-los sem risco de "ressuscitarem" numa sincronizacao
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS importado boolean DEFAULT false;")
+        # natureza definida no proprio lancamento, quando ele foge do padrao da categoria
+        # (ex: um PIX de R$ 98 mil que foi a compra de um terreno, e nao consumo)
+        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS natureza text;")
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
@@ -1188,8 +1196,9 @@ def index():
         "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
         "status, t.tipo, numero_cartao_final, parcela_atual, parcela_total, "
         "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada, "
-        "COALESCE(importado, false) AS importado "
-        "FROM cartao.transacao t WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
+        "COALESCE(importado, false) AS importado, t.natureza, "
+        f"{NATUREZA_SQL} AS natureza_efetiva "
+        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
         params,
     )
     rows = cur.fetchall()
@@ -1360,6 +1369,8 @@ def index():
             "conferida_por": r["conferida_por"] or "-",
             "observacao": r["observacao"] or "-",
             "_manual": bool(eh_manual),
+            "_natureza": r["natureza"] or "",
+            "_natureza_efetiva": NATUREZAS.get(r["natureza_efetiva"], r["natureza_efetiva"]),
         }
         detalhes.update(dim_detalhes)
         detalhes_js[str(rid)] = detalhes
@@ -1381,6 +1392,9 @@ def index():
 
     origem_filtro_html = chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()")
     categoria_options_manual = "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in categorias)
+    natureza_options = "".join(
+        f'<option value="{k}">{v}</option>' for k, v in NATUREZAS.items() if k != "fluxo"
+    )
 
     return f"""
     <html><head><title>Conferencia de Cartao</title>{BASE_CSS}</head>
@@ -1450,6 +1464,17 @@ def index():
           <span class="close" onclick="fecharModal()">&times;</span>
           <h3>Detalhes do lançamento</h3>
           <div id="modalBody"></div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
+            <div style="font-size:13px;margin-bottom:6px">Natureza deste lançamento</div>
+            <select id="modalNatureza" onchange="salvarNaturezaModal()" style="width:100%;padding:7px 9px">
+              <option value="">Seguir a categoria</option>
+              {natureza_options}
+            </select>
+            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
+              Use quando o lançamento foge do padrão da categoria — por exemplo um PIX que foi
+              a compra de um terreno ou veículo: não é despesa, é aquisição de bem.
+            </div>
+          </div>
           <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
             <label style="display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer">
               <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()" style="width:15px;height:15px;accent-color:var(--accent)">
@@ -1610,7 +1635,20 @@ def index():
           const trAtual = document.querySelector('tr[data-id="' + id + '"]');
           const dupAtual = trAtual ? trAtual.querySelector('.dup-check') : null;
           document.getElementById('modalDup').checked = dupAtual ? dupAtual.checked : false;
+          const selNat = document.getElementById('modalNatureza');
+          selNat.options[0].textContent = 'Seguir a categoria (' + (d._natureza_efetiva || 'Despesa') + ')';
+          selNat.value = d._natureza || '';
           document.getElementById('modalBg').classList.add('show');
+        }}
+        function salvarNaturezaModal() {{
+          if (!idAtualModal) return;
+          const nat = document.getElementById('modalNatureza').value;
+          const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
+          if (!tr) return;
+          if (window.detalhes[idAtualModal]) window.detalhes[idAtualModal]._natureza = nat;
+          salvar(idAtualModal, tr.querySelector('.cat-select'));
+          // a natureza muda os totais do mes, entao recarrega os numeros
+          setTimeout(() => window.location.reload(), 600);
         }}
         function toggleDuplicadaModal() {{
           if (!idAtualModal) return;
@@ -1658,6 +1696,7 @@ def index():
             duplicada: tr.querySelector('.dup-check').checked,
             observacao: tr.querySelector('.obs-input').value,
             categoria: tr.querySelector('.cat-select').value,
+            natureza: (window.detalhes[id] || {{}})._natureza || '',
             dimensoes: dimensoes
           }};
           const anterior = filaSalvar[id] || Promise.resolve();
@@ -1824,8 +1863,13 @@ def update_transacao(transacao_id):
     bloqueada = bool(faltando) and data.get("conferida", False)
     conferida_final = data.get("conferida", False) and not bloqueada
 
+    # natureza especifica deste lancamento ("" = volta a seguir a natureza da categoria)
+    natureza = data.get("natureza")
+    natureza = natureza if natureza in NATUREZAS else None
+
     cur.execute(
         "UPDATE cartao.transacao SET conferida = %s, duplicada = %s, observacao = %s, categoria = %s, "
+        "natureza = %s, "
         "conferida_por = CASE WHEN %s THEN %s ELSE conferida_por END, "
         "conferida_em = CASE WHEN %s THEN now() ELSE conferida_em END "
         "WHERE transacao_id = %s;",
@@ -1834,6 +1878,7 @@ def update_transacao(transacao_id):
             data.get("duplicada", False),
             data.get("observacao"),
             data.get("categoria"),
+            natureza,
             conferida_final,
             session.get("user"),
             conferida_final,
