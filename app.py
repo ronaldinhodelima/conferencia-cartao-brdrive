@@ -1055,6 +1055,7 @@ def topbar_html(titulo, ativo=None):
             <div class="dropdown-content">
               <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
               <a href="/dre" class="{cls('dre')}">DRE / Centro de Custos</a>
+              <a href="/investimentos" class="{cls('investimentos')}">Investimentos</a>
             </div>
           </div>
           <div class="dropdown">
@@ -3658,6 +3659,171 @@ def importar_view():
           }});
         }}
       </script>
+    </body></html>
+    """
+
+
+@app.route("/investimentos")
+@login_required
+def investimentos_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    try:
+        cur.execute(
+            "SELECT investimento_id, nome, tipo, subtipo, instituicao, saldo, valor_bruto, "
+            "valor_aplicado, impostos, taxa, tipo_taxa, data_posicao, data_vencimento, "
+            "data_aplicacao, status "
+            "FROM cartao.investimento ORDER BY saldo DESC NULLS LAST;"
+        )
+        posicoes = cur.fetchall()
+    except Exception:
+        conn.rollback()
+        posicoes = None
+
+    historico = []
+    if posicoes is not None:
+        # rendimento de cada mes = variacao do saldo total, descontando aportes e resgates
+        cur.execute(
+            "SELECT to_char(data, 'YYYY-MM') AS mes, MAX(data) AS ultima, "
+            "SUM(saldo) AS saldo, SUM(valor_aplicado) AS aplicado "
+            "FROM cartao.investimento_saldo "
+            "WHERE data = (SELECT MAX(d2.data) FROM cartao.investimento_saldo d2 "
+            "              WHERE to_char(d2.data,'YYYY-MM') = to_char(cartao.investimento_saldo.data,'YYYY-MM')) "
+            "GROUP BY 1 ORDER BY 1;"
+        )
+        historico = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    if posicoes is None:
+        return f"""
+        <html><head><title>Investimentos</title>{BASE_CSS}</head>
+        <body>
+          {topbar_html('Investimentos', 'investimentos')}
+          <div class="wrap"><div class="cat-breakdown">
+            <h3>Ainda não sincronizado</h3>
+            <div style="font-size:13px;color:var(--ink-soft)">
+              Os investimentos são carregados na próxima sincronização com o Pluggy.
+              Clique em <strong>Atualizar agora</strong> no topo e recarregue esta página.
+            </div>
+          </div></div>
+        </body></html>
+        """
+
+    ativos = [p for p in posicoes if float(p["saldo"] or 0) > 0]
+    encerrados = len(posicoes) - len(ativos)
+
+    saldo_total = sum(float(p["saldo"] or 0) for p in ativos)
+    bruto_total = sum(float(p["valor_bruto"] or 0) for p in ativos)
+    aplicado_total = sum(float(p["valor_aplicado"] or 0) for p in ativos)
+    ir_total = sum(float(p["impostos"] or 0) for p in ativos)
+    rendimento_bruto = bruto_total - aplicado_total
+    rend_pct = (rendimento_bruto / aplicado_total * 100) if aplicado_total else 0
+
+    def _dt(v):
+        return v.strftime("%d/%m/%Y") if v else "-"
+
+    linhas = []
+    for p in ativos:
+        aplicado = float(p["valor_aplicado"] or 0)
+        bruto = float(p["valor_bruto"] or 0)
+        rend = bruto - aplicado
+        pct = (rend / aplicado * 100) if aplicado else 0
+        taxa = ""
+        if p["taxa"] and float(p["taxa"]) > 0:
+            taxa = f'{float(p["taxa"]):g}% {p["tipo_taxa"] or ""}'.strip()
+        linhas.append(
+            f'<tr>'
+            f'<td>{(p["nome"] or "-")[:46]}<div style="font-size:11px;color:var(--ink-faint)">'
+            f'{p["subtipo"] or p["tipo"] or ""}{" · " + taxa if taxa else ""}</div></td>'
+            f'<td class="valor">{_fmt_moeda(aplicado)}</td>'
+            f'<td class="valor">{_fmt_moeda(bruto)}</td>'
+            f'<td class="valor" style="color:#1f8a53">{_fmt_moeda(rend)}<div style="font-size:11px">{pct:.1f}%</div></td>'
+            f'<td class="valor" style="color:var(--ink-faint)">{_fmt_moeda(float(p["impostos"] or 0))}</td>'
+            f'<td class="valor" style="font-weight:600">{_fmt_moeda(float(p["saldo"] or 0))}</td>'
+            f'<td style="font-size:11.5px;color:var(--ink-soft)">{_dt(p["data_vencimento"])}</td>'
+            f'</tr>'
+        )
+    corpo = "".join(linhas) or '<tr><td colspan="7" style="padding:18px;text-align:center;color:#888">Nenhum investimento com saldo.</td></tr>'
+
+    # evolucao mes a mes (so a partir do momento em que passamos a guardar o retrato)
+    linhas_hist = []
+    anterior = None
+    for h in reversed(historico):
+        saldo = float(h["saldo"] or 0)
+        aplicado = float(h["aplicado"] or 0)
+        variacao = ""
+        if anterior is not None:
+            dif = anterior - saldo
+            cor = "#1f8a53" if dif >= 0 else "#c23c34"
+            variacao = f'<span style="color:{cor}">{_fmt_moeda(dif)}</span>'
+        mes = h["mes"]
+        linhas_hist.append(
+            f'<tr><td>{MESES_ABREV[int(mes[5:7]) - 1]}/{mes[2:4]}</td>'
+            f'<td class="valor">{_fmt_moeda(aplicado)}</td>'
+            f'<td class="valor">{_fmt_moeda(saldo)}</td>'
+            f'<td class="valor">{variacao or "-"}</td></tr>'
+        )
+        anterior = saldo
+    bloco_hist = ""
+    if len(historico) > 1:
+        bloco_hist = f"""
+        <div class="cat-breakdown">
+          <h3>Evolução do saldo</h3>
+          <table class="compacta">
+            <thead><tr><th>Mês</th><th style="text-align:right">Aplicado</th>
+            <th style="text-align:right">Saldo</th><th style="text-align:right">Variação</th></tr></thead>
+            <tbody>{"".join(linhas_hist)}</tbody>
+          </table>
+        </div>"""
+    else:
+        bloco_hist = """
+        <div class="cat-breakdown">
+          <h3>Evolução do saldo</h3>
+          <div style="font-size:13px;color:var(--ink-soft)">
+            O Pluggy devolve apenas a posição de hoje, sem histórico. A partir de agora o app
+            guarda um retrato do saldo a cada sincronização, então a evolução mês a mês
+            começa a aparecer no próximo mês.
+          </div>
+        </div>"""
+
+    return f"""
+    <html><head><title>Investimentos</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Investimentos', 'investimentos')}
+      <div class="wrap">
+        <div class="cards">
+          <div class="card"><div class="label">Saldo líquido</div><div class="val">{_fmt_moeda(saldo_total)}</div></div>
+          <div class="card"><div class="label">Valor aplicado</div><div class="val" style="font-size:19px">{_fmt_moeda(aplicado_total)}</div></div>
+          <div class="card"><div class="label">Rendimento bruto</div><div class="val" style="color:#1f8a53;font-size:19px">{_fmt_moeda(rendimento_bruto)}</div><div class="sub">{rend_pct:.1f}% sobre o aplicado</div></div>
+          <div class="card"><div class="label">IR a recolher</div><div class="val" style="color:#c23c34;font-size:19px">{_fmt_moeda(ir_total)}</div></div>
+          <div class="card"><div class="label">Aplicações ativas</div><div class="val">{len(ativos)}</div><div class="sub">{encerrados} encerradas</div></div>
+        </div>
+
+        <div class="cat-breakdown">
+          <h3>Posição por aplicação</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+            O <strong>saldo é patrimônio</strong>, não entra no DRE — aplicar e resgatar só muda a forma do dinheiro.
+            O que entra no resultado é o <strong>rendimento</strong> (receita financeira) e o <strong>IR</strong> (despesa financeira).
+          </div>
+          <table class="compacta">
+            <thead><tr>
+              <th>Aplicação</th>
+              <th style="text-align:right">Aplicado</th>
+              <th style="text-align:right">Bruto hoje</th>
+              <th style="text-align:right">Rendimento</th>
+              <th style="text-align:right">IR</th>
+              <th style="text-align:right">Saldo líquido</th>
+              <th>Vencimento</th>
+            </tr></thead>
+            <tbody>{corpo}</tbody>
+          </table>
+        </div>
+
+        {bloco_hist}
+      </div>
     </body></html>
     """
 
