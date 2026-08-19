@@ -3114,11 +3114,13 @@ def importar_confirmar():
                 "transacao_id, account_id, descricao, descricao_bruta, valor_original, moeda_original, "
                 "valor_brl, data_transacao, status, tipo, importado, criado_em, atualizado_em, sincronizado_em"
                 ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,'POSTED',%s, true, now(), now(), now()) "
-                "ON CONFLICT (transacao_id) DO NOTHING;",
+                "ON CONFLICT (transacao_id) DO UPDATE SET importado = true "
+                "RETURNING (xmax = 0) AS novo;",
                 (tid, account_id, desc, desc, valor, valor,
                  f"{data.isoformat()} 12:00:00-03:00", it.get("tipo") or "DEBIT"),
             )
-            inseridos += cur.rowcount
+            if cur.fetchone()[0]:
+                inseridos += 1
         conn.commit()
         # aplica as regras de classificacao automatica nos recem-importados
         cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
