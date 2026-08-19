@@ -401,33 +401,61 @@ def run_sync():
             raise RuntimeError("Nenhuma conexao Pluggy configurada (env PLUGGY_ITEM_ID vazia)")
 
         for item_id in item_ids:
-            item = pluggy_get(f"/items/{item_id}", api_key)
+            # uma conexao com problema (ex: autorizacao expirada no banco) nao pode
+            # derrubar a sincronizacao das outras
+            try:
+                item = pluggy_get(f"/items/{item_id}", api_key)
+            except Exception as e:
+                conexoes.append({"item": item_id, "status": "erro", "detalhe": str(e)[:120]})
+                continue
+
+            nome_conexao = (item.get("connector") or {}).get("name") or item_id
+            exec_status = item.get("executionStatus")
+            erro_item = (item.get("error") or {}).get("message")
+
             accounts = pluggy_get("/accounts", api_key, {"itemId": item_id}).get("results", [])
             contas = [a for a in accounts if a.get("type") in ("CREDIT", "BANK")]
+
+            if not contas:
+                # conexao criada mas nunca concluida (USER_INPUT_TIMEOUT, LOGIN_ERROR...)
+                conexoes.append({
+                    "item": item_id, "conexao": nome_conexao, "status": item.get("status"),
+                    "execucao": exec_status, "contas": 0,
+                    "detalhe": erro_item or "nenhuma conta - refaca a conexao no Pluggy",
+                })
+                continue
 
             upsert_item(cur, item)
             for acc in contas:
                 upsert_account(cur, item["id"], acc)
             conn.commit()
 
+            novas_item = atualizadas_item = 0
             for acc in contas:
                 for tx in fetch_all_transactions(api_key, acc["id"]):
                     if upsert_transaction(cur, tx):
-                        novas += 1
+                        novas_item += 1
                     else:
-                        atualizadas += 1
+                        atualizadas_item += 1
                 conn.commit()
+            novas += novas_item
+            atualizadas += atualizadas_item
 
             # investimentos da conexao (renda fixa, previdencia, fundos...)
+            inv_item = 0
             try:
                 for inv in pluggy_get("/investments", api_key, {"itemId": item_id}).get("results", []):
                     upsert_investimento(cur, item["id"], inv)
-                    investimentos += 1
+                    inv_item += 1
                 conn.commit()
             except Exception as e:
                 print(f"Aviso: falha ao sincronizar investimentos de {item_id}: {e}")
+            investimentos += inv_item
 
-            conexoes.append(item.get("connector", {}).get("name") or item_id)
+            conexoes.append({
+                "conexao": nome_conexao, "status": item.get("status"), "contas": len(contas),
+                "transacoes_novas": novas_item, "investimentos": inv_item,
+            })
 
         cur.execute(
             """
