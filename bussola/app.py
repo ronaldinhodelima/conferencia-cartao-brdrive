@@ -86,6 +86,41 @@ CREATE TABLE IF NOT EXISTS cartao.sync_log (
     transacoes_atualizadas INTEGER,
     mensagem_erro    TEXT
 );
+
+-- Posicao atual de cada investimento (renda fixa, previdencia, fundos...).
+-- O saldo e patrimonio, nao entra no DRE; o que entra no resultado e o rendimento.
+CREATE TABLE IF NOT EXISTS cartao.investimento (
+    investimento_id  TEXT PRIMARY KEY,
+    item_id          UUID,
+    nome             TEXT,
+    tipo             TEXT,
+    subtipo          TEXT,
+    instituicao      TEXT,
+    moeda            TEXT,
+    saldo            NUMERIC(16,2),   -- liquido (ja descontado o IR)
+    valor_bruto      NUMERIC(16,2),
+    valor_aplicado   NUMERIC(16,2),
+    impostos         NUMERIC(16,2),
+    taxa             NUMERIC(12,4),
+    tipo_taxa        TEXT,
+    data_posicao     TIMESTAMPTZ,
+    data_vencimento  TIMESTAMPTZ,
+    data_aplicacao   TIMESTAMPTZ,
+    status           TEXT,
+    atualizado_em    TIMESTAMPTZ DEFAULT now()
+);
+
+-- Retrato diario do saldo: a API do Pluggy so devolve a posicao de hoje, entao
+-- guardamos o historico para conseguir calcular o rendimento de cada mes.
+CREATE TABLE IF NOT EXISTS cartao.investimento_saldo (
+    investimento_id  TEXT NOT NULL,
+    data             DATE NOT NULL,
+    saldo            NUMERIC(16,2),
+    valor_bruto      NUMERIC(16,2),
+    valor_aplicado   NUMERIC(16,2),
+    impostos         NUMERIC(16,2),
+    PRIMARY KEY (investimento_id, data)
+);
 """
 
 
@@ -273,12 +308,79 @@ def upsert_transaction(cur, tx):
     return cur.fetchone()[0]
 
 
+CONTA_MANUAL_ITEM = "00000000-0000-0000-0000-000000000001"
+
+
+def listar_itens(cur):
+    """Todas as conexoes Pluggy a sincronizar.
+
+    A API nao permite listar os itens da aplicacao com a chave de API (GET /items
+    devolve 401), entao a lista vem de duas fontes que se complementam:
+      1. a env PLUGGY_ITEM_ID (aceita varios ids separados por virgula) - usada
+         para cadastrar uma conexao nova;
+      2. as conexoes ja gravadas em cartao.pluggy_item - assim, depois do primeiro
+         sync, a conexao continua sendo atualizada mesmo que saia da env.
+    Basta conectar um banco novo no Pluggy e informar o id uma vez.
+    """
+    itens = {i.strip() for i in (PLUGGY_ITEM_ID or "").replace(";", ",").split(",") if i.strip()}
+    try:
+        cur.execute("SELECT item_id FROM cartao.pluggy_item WHERE item_id <> %s;", (CONTA_MANUAL_ITEM,))
+        itens |= {str(r[0]) for r in cur.fetchall()}
+    except Exception:
+        pass
+    return sorted(itens)
+
+
+def upsert_investimento(cur, item_id, inv):
+    """Grava a posicao atual de um investimento e um retrato diario do saldo.
+
+    O retrato permite calcular depois quanto rendeu em cada mes - a API do Pluggy
+    devolve so a posicao de hoje, sem historico.
+    """
+    cur.execute(
+        """
+        INSERT INTO cartao.investimento (
+            investimento_id, item_id, nome, tipo, subtipo, instituicao, moeda,
+            saldo, valor_bruto, valor_aplicado, impostos, taxa, tipo_taxa,
+            data_posicao, data_vencimento, data_aplicacao, status, atualizado_em
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+        ON CONFLICT (investimento_id) DO UPDATE SET
+            saldo = EXCLUDED.saldo,
+            valor_bruto = EXCLUDED.valor_bruto,
+            valor_aplicado = EXCLUDED.valor_aplicado,
+            impostos = EXCLUDED.impostos,
+            data_posicao = EXCLUDED.data_posicao,
+            status = EXCLUDED.status,
+            atualizado_em = now();
+        """,
+        (
+            inv["id"], item_id, inv.get("name"), inv.get("type"), inv.get("subtype"),
+            inv.get("institution"), inv.get("currencyCode"),
+            inv.get("balance"), inv.get("amount"), inv.get("amountOriginal"),
+            inv.get("taxes"), inv.get("rate"), inv.get("rateType"),
+            inv.get("date"), inv.get("dueDate"), inv.get("issueDate"), inv.get("status"),
+        ),
+    )
+    cur.execute(
+        """
+        INSERT INTO cartao.investimento_saldo (investimento_id, data, saldo, valor_bruto, valor_aplicado, impostos)
+        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s)
+        ON CONFLICT (investimento_id, data) DO UPDATE SET
+            saldo = EXCLUDED.saldo,
+            valor_bruto = EXCLUDED.valor_bruto,
+            valor_aplicado = EXCLUDED.valor_aplicado,
+            impostos = EXCLUDED.impostos;
+        """,
+        (inv["id"], inv.get("balance"), inv.get("amount"), inv.get("amountOriginal"), inv.get("taxes")),
+    )
+
+
 def run_sync():
-    if not (PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET and PLUGGY_ITEM_ID):
+    if not (PLUGGY_CLIENT_ID and PLUGGY_CLIENT_SECRET):
         SYNC_STATE.update(
             {
                 "status": "error",
-                "detail": "Faltam envs PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET / PLUGGY_ITEM_ID",
+                "detail": "Faltam envs PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET",
                 "last_run": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -286,36 +388,53 @@ def run_sync():
 
     novas = 0
     atualizadas = 0
+    investimentos = 0
+    conexoes = []
     erro = None
     try:
         api_key = pluggy_auth()
-        item = pluggy_get(f"/items/{PLUGGY_ITEM_ID}", api_key)
-        accounts = pluggy_get("/accounts", api_key, {"itemId": PLUGGY_ITEM_ID}).get("results", [])
-        credit_accounts = [a for a in accounts if a.get("type") in ("CREDIT", "BANK")]
-
         conn = get_conn()
         cur = conn.cursor()
-        upsert_item(cur, item)
-        for acc in credit_accounts:
-            upsert_account(cur, item["id"], acc)
-        conn.commit()
 
-        for acc in credit_accounts:
-            txs = fetch_all_transactions(api_key, acc["id"])
-            for tx in txs:
-                inserted = upsert_transaction(cur, tx)
-                if inserted:
-                    novas += 1
-                else:
-                    atualizadas += 1
+        item_ids = listar_itens(cur)
+        if not item_ids:
+            raise RuntimeError("Nenhuma conexao Pluggy configurada (env PLUGGY_ITEM_ID vazia)")
+
+        for item_id in item_ids:
+            item = pluggy_get(f"/items/{item_id}", api_key)
+            accounts = pluggy_get("/accounts", api_key, {"itemId": item_id}).get("results", [])
+            contas = [a for a in accounts if a.get("type") in ("CREDIT", "BANK")]
+
+            upsert_item(cur, item)
+            for acc in contas:
+                upsert_account(cur, item["id"], acc)
             conn.commit()
+
+            for acc in contas:
+                for tx in fetch_all_transactions(api_key, acc["id"]):
+                    if upsert_transaction(cur, tx):
+                        novas += 1
+                    else:
+                        atualizadas += 1
+                conn.commit()
+
+            # investimentos da conexao (renda fixa, previdencia, fundos...)
+            try:
+                for inv in pluggy_get("/investments", api_key, {"itemId": item_id}).get("results", []):
+                    upsert_investimento(cur, item["id"], inv)
+                    investimentos += 1
+                conn.commit()
+            except Exception as e:
+                print(f"Aviso: falha ao sincronizar investimentos de {item_id}: {e}")
+
+            conexoes.append(item.get("connector", {}).get("name") or item_id)
 
         cur.execute(
             """
             INSERT INTO cartao.sync_log (item_id, status, transacoes_novas, transacoes_atualizadas, mensagem_erro)
             VALUES (%s,%s,%s,%s,%s);
             """,
-            (item["id"], "SUCCESS", novas, atualizadas, None),
+            (item_ids[0], "SUCCESS", novas, atualizadas, None),
         )
         conn.commit()
         cur.close()
@@ -325,7 +444,12 @@ def run_sync():
             {
                 "status": "ok",
                 "last_run": datetime.now(timezone.utc).isoformat(),
-                "detail": {"transacoes_novas": novas, "transacoes_atualizadas": atualizadas},
+                "detail": {
+                    "transacoes_novas": novas,
+                    "transacoes_atualizadas": atualizadas,
+                    "investimentos": investimentos,
+                    "conexoes": conexoes,
+                },
             }
         )
     except Exception as e:
