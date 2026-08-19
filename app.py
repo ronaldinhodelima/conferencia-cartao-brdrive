@@ -1181,30 +1181,30 @@ def index():
     categorias_db = {r["categoria"] for r in cur.fetchall()}
     categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
 
-    where = ["to_char(data_transacao, 'YYYY-MM') = %s"]
+    where = ["to_char(t.data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
     if origem_sel:
         where.append("t.account_id IN %s")
         params.append(tuple(origem_sel))
     if status == "conferida":
-        where.append("conferida = true")
+        where.append("t.conferida = true")
     elif status == "pendente":
-        where.append("conferida = false")
+        where.append("t.conferida = false")
 
     cur.execute(
-        "SELECT t.transacao_id, t.account_id, data_transacao, descricao, categoria, "
-        "COALESCE(valor_brl, valor_original) AS valor, valor_original, moeda_original, "
-        "status, t.tipo, numero_cartao_final, parcela_atual, parcela_total, "
-        "conferida, observacao, conferida_por, conferida_em, COALESCE(duplicada, false) AS duplicada, "
-        "COALESCE(importado, false) AS importado, t.natureza, "
+        "SELECT t.transacao_id, t.account_id, t.data_transacao, t.descricao, t.categoria, "
+        "COALESCE(t.valor_brl, t.valor_original) AS valor, t.valor_original, t.moeda_original, "
+        "t.status, t.tipo, t.numero_cartao_final, t.parcela_atual, t.parcela_total, "
+        "t.conferida, t.observacao, t.conferida_por, t.conferida_em, COALESCE(t.duplicada, false) AS duplicada, "
+        "COALESCE(t.importado, false) AS importado, t.natureza, "
         f"{NATUREZA_SQL} AS natureza_efetiva "
-        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where) + " ORDER BY data_transacao DESC;",
+        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where) + " ORDER BY t.data_transacao DESC;",
         params,
     )
     rows = cur.fetchall()
 
     # resumo do mes (nao filtrado por status, sempre do mes inteiro; duplicadas nao contam)
-    where_resumo = ["to_char(data_transacao,'YYYY-MM') = %s", "COALESCE(duplicada, false) = false"]
+    where_resumo = ["to_char(t.data_transacao,'YYYY-MM') = %s", "COALESCE(t.duplicada, false) = false"]
     params_resumo = [mes]
     if origem_sel:
         where_resumo.append("t.account_id IN %s")
@@ -1212,7 +1212,7 @@ def index():
     # gasto real = so o que tem natureza de despesa (fatura, transferencia,
     # investimento e compra de bem nao sao gasto - ver NATUREZAS)
     cur.execute(
-        "SELECT COUNT(*) total, SUM(CASE WHEN conferida THEN 1 ELSE 0 END) conferidas, "
+        "SELECT COUNT(*) total, SUM(CASE WHEN t.conferida THEN 1 ELSE 0 END) conferidas, "
         f"SUM(CASE WHEN {NATUREZA_SQL} = 'despesa' THEN {VAL_DESPESA} ELSE 0 END) AS gasto_real, "
         f"SUM(CASE WHEN {NATUREZA_SQL} = 'receita' THEN -{VAL_DESPESA} ELSE 0 END) AS receita_mes "
         f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where_resumo) + ";",
@@ -1220,16 +1220,16 @@ def index():
     )
     resumo = cur.fetchone()
 
-    where_cat = ["to_char(data_transacao,'YYYY-MM') = %s", f"{NATUREZA_SQL} = 'despesa'",
-                 "categoria IS NOT NULL", "COALESCE(duplicada, false) = false"]
+    where_cat = ["to_char(t.data_transacao,'YYYY-MM') = %s", f"{NATUREZA_SQL} = 'despesa'",
+                 "t.categoria IS NOT NULL", "COALESCE(t.duplicada, false) = false"]
     params_cat = [mes]
     if origem_sel:
         where_cat.append("t.account_id IN %s")
         params_cat.append(tuple(origem_sel))
     cur.execute(
-        f"SELECT categoria, SUM({VAL_DESPESA}) AS total "
+        f"SELECT t.categoria, SUM({VAL_DESPESA}) AS total "
         f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE " + " AND ".join(where_cat) +
-        " GROUP BY categoria ORDER BY total DESC LIMIT 8;",
+        " GROUP BY t.categoria ORDER BY total DESC LIMIT 8;",
         params_cat,
     )
     por_categoria = cur.fetchall()
