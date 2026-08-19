@@ -81,6 +81,8 @@ FATURA_DIA_FECHAMENTO = 12
 # conta sintetica usada para lancamentos manuais (dinheiro em especie), fora do Pluggy
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
+MESES_ABREV = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
+
 
 # nomes de banco reconhecidos dentro do nome da conta/instituicao retornado pelo Pluggy
 # (o connector_name do Pluggy costuma ser generico, ex: "MeuPluggy", entao preferimos
@@ -2784,34 +2786,52 @@ def relatorios():
         function renderResultado(data) {{
           document.getElementById('totalGeral').textContent = fmtMoeda(data.total_geral);
           document.getElementById('qtdGeral').textContent = data.qtd_geral;
-          document.getElementById('graficoTitulo').textContent = 'Gráfico (' + data.agrupar_label + ')';
-          renderGrupos(data.grupos);
-          renderChart(data.grupos);
+          const ehPeriodo = data.agrupar === 'mes';
+          document.getElementById('graficoTitulo').textContent =
+            ehPeriodo ? 'Evolução mês a mês' : 'Gráfico (' + data.agrupar_label + ')';
+          renderGrupos(data.grupos, ehPeriodo);
+          renderChart(data.grupos, ehPeriodo);
         }}
 
         // ---- lista de totais agrupados, clicavel para ver os lancamentos de cada grupo ----
         window.__grupos = [];
-        function renderGrupos(grupos) {{
+        function renderGrupos(grupos, ehPeriodo) {{
           window.__grupos = grupos;
           const cont = document.getElementById('gruposCont');
           if (!grupos.length) {{
             cont.innerHTML = '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>';
             return;
           }}
-          cont.innerHTML = grupos.map((g, i) => (
-            '<div>' +
+          // na linha do tempo a barra fica proporcional ao maior mes (fica legivel),
+          // e mostramos a variacao em relacao ao mes anterior
+          const maxTotal = Math.max.apply(null, grupos.map(g => Math.abs(g.total)).concat([1]));
+          cont.innerHTML = grupos.map((g, i) => {{
+            const larguraBarra = ehPeriodo ? (Math.abs(g.total) / maxTotal * 100) : Math.max(g.pct, 0);
+            let direita = '<strong>' + fmtMoeda(g.total) + '</strong> <span style="color:#aaa">' + g.pct + '%</span>';
+            if (ehPeriodo && i > 0) {{
+              const ant = grupos[i - 1].total;
+              if (ant) {{
+                const varPct = (g.total - ant) / Math.abs(ant) * 100;
+                const cor = varPct > 0 ? 'var(--bad)' : 'var(--good)';
+                const sinal = varPct > 0 ? '▲' : '▼';
+                direita = '<strong>' + fmtMoeda(g.total) + '</strong> ' +
+                          '<span style="color:' + cor + ';font-size:12px" title="variação em relação ao mês anterior">' +
+                          sinal + ' ' + Math.abs(varPct).toFixed(1) + '%</span>';
+              }}
+            }}
+            return '<div>' +
               '<div class="rel-grupo-row" style="cursor:pointer" onclick="toggleGrupoDetalhe(' + i + ')">' +
                 '<div style="flex:1">' +
                   '<div style="display:flex;justify-content:space-between">' +
                     '<span>' + g.nome + ' <span style="color:#aaa">(' + g.qtd + ')</span></span>' +
-                    '<span><strong>' + fmtMoeda(g.total) + '</strong> <span style="color:#aaa">' + g.pct + '%</span></span>' +
+                    '<span>' + direita + '</span>' +
                   '</div>' +
-                  '<div class="barra"><div style="width:' + Math.max(g.pct, 0) + '%"></div></div>' +
+                  '<div class="barra"><div style="width:' + larguraBarra + '%"></div></div>' +
                 '</div>' +
               '</div>' +
               '<div class="rel-grupo-detalhe" id="grupoDetalhe' + i + '" style="display:none"></div>' +
-            '</div>'
-          )).join('');
+            '</div>';
+          }}).join('');
         }}
         function toggleGrupoDetalhe(i) {{
           const el = document.getElementById('grupoDetalhe' + i);
@@ -2846,21 +2866,40 @@ def relatorios():
 
         // ---- grafico dinamico conforme os filtros aplicados ----
         let chartInstance = null;
-        function renderChart(grupos) {{
+        let chartTipoAtual = null;
+        function renderChart(grupos, ehPeriodo) {{
+          if (!window.Chart) return;
           const labels = grupos.map(g => g.nome);
           const valores = grupos.map(g => g.total);
-          if (!window.Chart) return;
-          if (chartInstance) {{
+          // linha do tempo (mes a mes) fica melhor como linha; os demais, como barras
+          const tipo = ehPeriodo ? 'line' : 'bar';
+          const dataset = ehPeriodo
+            ? {{ label: 'Total (R$)', data: valores, borderColor: '#2e6fd6', backgroundColor: 'rgba(46,111,214,.12)',
+                 fill: true, tension: .3, pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: '#2e6fd6', borderWidth: 2 }}
+            : {{ label: 'Total (R$)', data: valores, backgroundColor: '#2e6fd6', borderRadius: 4, maxBarThickness: 46 }};
+
+          if (chartInstance && chartTipoAtual === tipo) {{
             chartInstance.data.labels = labels;
-            chartInstance.data.datasets[0].data = valores;
+            chartInstance.data.datasets[0] = dataset;
             chartInstance.update();
-          }} else {{
-            chartInstance = new Chart(document.getElementById('chartGrupos'), {{
-              type: 'bar',
-              data: {{ labels: labels, datasets: [{{ label: 'Total (R$)', data: valores, backgroundColor: '#2e6fd6', borderRadius: 4, maxBarThickness: 46 }}] }},
-              options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }}, scales: {{ y: {{ beginAtZero: true }} }} }}
-            }});
+            return;
           }}
+          if (chartInstance) chartInstance.destroy();
+          chartTipoAtual = tipo;
+          chartInstance = new Chart(document.getElementById('chartGrupos'), {{
+            type: tipo,
+            data: {{ labels: labels, datasets: [dataset] }},
+            options: {{
+              responsive: true,
+              plugins: {{
+                legend: {{ display: false }},
+                tooltip: {{ callbacks: {{ label: c => fmtMoeda(c.parsed.y) }} }}
+              }},
+              scales: {{
+                y: {{ beginAtZero: true, ticks: {{ callback: v => 'R$ ' + Number(v).toLocaleString('pt-BR') }} }}
+              }}
+            }}
+          }});
         }}
 
         document.addEventListener('DOMContentLoaded', function() {{
@@ -2881,9 +2920,12 @@ def relatorios_dados():
     dimensoes = cur.fetchall()
     cfg = _montar_filtro_relatorio(dimensoes)
 
+    # agrupando por periodo o resultado e uma linha do tempo: ordena cronologicamente
+    # (do mais antigo para o mais recente). Nos demais agrupamentos, maior valor primeiro.
+    ordem = f"{cfg['group_expr']} ASC" if cfg["agrupar"] == "mes" else "total DESC"
     cur.execute(
         f"SELECT {cfg['group_expr']} AS grupo, COUNT(*) AS qtd, SUM(COALESCE(t.valor_brl, t.valor_original)) AS total "
-        f"FROM cartao.transacao t {cfg['join_extra']} WHERE {cfg['where_sql']} GROUP BY {cfg['group_expr']} ORDER BY total DESC;",
+        f"FROM cartao.transacao t {cfg['join_extra']} WHERE {cfg['where_sql']} GROUP BY {cfg['group_expr']} ORDER BY {ordem};",
         cfg["params"],
     )
     grupos_raw = cur.fetchall()
@@ -2916,6 +2958,13 @@ def relatorios_dados():
         if cfg["agrupar"] == "origem":
             c = contas_by_id.get(str(g))
             return c["label"] if c else "(sem origem)"
+        if cfg["agrupar"] == "mes":
+            # '2026-01' -> 'jan/26', mais legivel na linha do tempo
+            try:
+                ano, mes = str(g).split("-")
+                return f"{MESES_ABREV[int(mes) - 1]}/{ano[2:]}"
+            except (ValueError, IndexError):
+                return g or "(sem periodo)"
         return g if g else "(nao definido)"
 
     grupos = []
