@@ -2796,20 +2796,24 @@ def relatorios():
         // ---- lista de totais agrupados, clicavel para ver os lancamentos de cada grupo ----
         window.__grupos = [];
         function renderGrupos(grupos, ehPeriodo) {{
-          window.__grupos = grupos;
+          // o grafico fica na ordem cronologica (linha do tempo); ja a lista abaixo
+          // mostra o mes mais recente no topo, que e o que se quer olhar primeiro
+          const lista = ehPeriodo ? grupos.slice().reverse() : grupos;
+          window.__grupos = lista;
           const cont = document.getElementById('gruposCont');
-          if (!grupos.length) {{
+          if (!lista.length) {{
             cont.innerHTML = '<div style="color:#888;padding:10px 0">Nenhum lancamento encontrado com esses filtros.</div>';
             return;
           }}
           // na linha do tempo a barra fica proporcional ao maior mes (fica legivel),
           // e mostramos a variacao em relacao ao mes anterior
-          const maxTotal = Math.max.apply(null, grupos.map(g => Math.abs(g.total)).concat([1]));
-          cont.innerHTML = grupos.map((g, i) => {{
+          const maxTotal = Math.max.apply(null, lista.map(g => Math.abs(g.total)).concat([1]));
+          cont.innerHTML = lista.map((g, i) => {{
             const larguraBarra = ehPeriodo ? (Math.abs(g.total) / maxTotal * 100) : Math.max(g.pct, 0);
             let direita = '<strong>' + fmtMoeda(g.total) + '</strong> <span style="color:#aaa">' + g.pct + '%</span>';
-            if (ehPeriodo && i > 0) {{
-              const ant = grupos[i - 1].total;
+            // lista invertida: o mes anterior e o de baixo (i + 1)
+            if (ehPeriodo && i < lista.length - 1) {{
+              const ant = lista[i + 1].total;
               if (ant) {{
                 const varPct = (g.total - ant) / Math.abs(ant) * 100;
                 const cor = varPct > 0 ? 'var(--bad)' : 'var(--good)';
