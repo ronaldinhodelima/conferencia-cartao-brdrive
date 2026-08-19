@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import traceback
+import urllib.parse
 from datetime import datetime, timezone
 
 import requests
@@ -142,19 +143,36 @@ def pluggy_get(path, api_key, params=None):
 
 
 def fetch_all_transactions(api_key, account_id):
+    """Busca TODAS as transacoes da conta, seguindo a paginacao do Pluggy.
+
+    A API v2 devolve no maximo 500 por pagina e o link da proxima pagina vem no
+    campo `next` (uma querystring pronta, ex: "?accountId=...&after=..."). Antes
+    liamos `cursor.after`, que nao existe na resposta - por isso so vinham os 500
+    mais recentes. Tratamos os dois formatos por seguranca.
+    """
     results = []
-    after = None
-    while True:
-        params = {"accountId": account_id}
-        if after:
-            params["after"] = after
+    params = {"accountId": account_id}
+    paginas = 0
+    while paginas < 500:
         data = pluggy_get("/v2/transactions", api_key, params)
         page_results = data.get("results", [])
         results.extend(page_results)
-        cursor = data.get("cursor") or {}
-        after = cursor.get("after")
-        if not after or not page_results:
+        paginas += 1
+        if not page_results:
             break
+
+        proxima = data.get("next")
+        if proxima:
+            qs = urllib.parse.parse_qs(str(proxima).lstrip("?"))
+            params = {k: v[0] for k, v in qs.items() if v}
+            if params.get("accountId") and params.get("after"):
+                continue
+
+        after = (data.get("cursor") or {}).get("after")
+        if after:
+            params = {"accountId": account_id, "after": after}
+            continue
+        break
     return results
 
 
