@@ -390,6 +390,7 @@ def run_sync():
     atualizadas = 0
     investimentos = 0
     conexoes = []
+    itens_ok = []          # so as conexoes que realmente gravaram dados
     erro = None
     try:
         api_key = pluggy_auth()
@@ -456,15 +457,18 @@ def run_sync():
                 "conexao": nome_conexao, "status": item.get("status"), "contas": len(contas),
                 "transacoes_novas": novas_item, "investimentos": inv_item,
             })
+            itens_ok.append(item["id"])
 
-        cur.execute(
-            """
-            INSERT INTO cartao.sync_log (item_id, status, transacoes_novas, transacoes_atualizadas, mensagem_erro)
-            VALUES (%s,%s,%s,%s,%s);
-            """,
-            (item_ids[0], "SUCCESS", novas, atualizadas, None),
-        )
-        conn.commit()
+        # o log referencia pluggy_item, entao so registra com uma conexao que gravou dados
+        if itens_ok:
+            cur.execute(
+                """
+                INSERT INTO cartao.sync_log (item_id, status, transacoes_novas, transacoes_atualizadas, mensagem_erro)
+                VALUES (%s,%s,%s,%s,%s);
+                """,
+                (itens_ok[0], "SUCCESS", novas, atualizadas, None),
+            )
+            conn.commit()
         cur.close()
         conn.close()
 
@@ -490,7 +494,7 @@ def run_sync():
                 INSERT INTO cartao.sync_log (item_id, status, transacoes_novas, transacoes_atualizadas, mensagem_erro)
                 VALUES (%s,%s,%s,%s,%s);
                 """,
-                (PLUGGY_ITEM_ID, "ERROR", novas, atualizadas, erro),
+                (itens_ok[0] if itens_ok else None, "ERROR", novas, atualizadas, erro),
             )
             conn.commit()
             cur.close()
