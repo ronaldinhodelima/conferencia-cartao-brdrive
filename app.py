@@ -558,7 +558,7 @@ BASE_CSS = """
   table.compacta th { padding: 8px 8px; font-size: 10px; }
   table.compacta td { padding: 5px 8px; font-size: 12.5px; }
   table.compacta .cel-data { width: 78px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.25; }
-  table.compacta .cel-desc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.compacta .cel-desc { width: auto; min-width: 240px; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   table.compacta .cel-origem { width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-size: 11.5px; }
   table.compacta .cel-valor { width: 96px; }
   table.compacta .cel-check { width: 42px; text-align: center; }
@@ -1017,8 +1017,8 @@ def index():
             + "".join(dim_tds) +
             f'<td class="valor cel-valor" style="{cor_valor}">{valor_fmt}</td>'
             f'<td class="cel-obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..." onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)"></td>'
-            f'<td class="cel-check"><input class="dup-check" type="checkbox" {dup_checked} onchange="toggleDuplicada(\'{rid}\', this)"></td>'
+            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)">'
+            f'<input class="dup-check" type="checkbox" {dup_checked} hidden></td>'
             f'<td class="cel-status"><span class="status" id="status-{rid}">ok</span></td>'
             f'</tr>'
         )
@@ -1043,7 +1043,7 @@ def index():
     total = resumo["total"] or 0
     conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
-    colspan_total = 9 + len(dimensoes)
+    colspan_total = 8 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
     dim_headers = "".join(f'<th class="cel-dim">{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
@@ -1111,7 +1111,7 @@ def index():
 
         <table class="compacta">
           <thead><tr>
-            <th class="cel-data">Data</th><th class="cel-desc">Descricao</th><th class="cel-origem">Origem</th><th class="cel-dim">Categoria</th>{dim_headers}<th class="cel-valor" style="text-align:right">Valor</th><th class="cel-obs">Obs</th><th class="cel-check">Conf</th><th class="cel-check">Dup</th><th class="cel-status"></th>
+            <th class="cel-data">Data</th><th class="cel-desc">Descricao</th><th class="cel-origem">Origem</th><th class="cel-dim">Categoria</th>{dim_headers}<th class="cel-valor" style="text-align:right">Valor</th><th class="cel-obs">Obs</th><th class="cel-check">Conf</th><th class="cel-status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -1122,7 +1122,16 @@ def index():
           <span class="close" onclick="fecharModal()">&times;</span>
           <h3>Detalhes do lançamento</h3>
           <div id="modalBody"></div>
-          <div id="modalAcoes" style="margin-top:16px;display:none">
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
+            <label style="display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()" style="width:15px;height:15px;accent-color:var(--accent)">
+              Marcar como duplicada
+            </label>
+            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
+              Lançamentos duplicados ficam riscados e não entram nos totais.
+            </div>
+          </div>
+          <div id="modalAcoes" style="margin-top:14px;display:none">
             <button type="button" class="btn-perigo" onclick="excluirManual()">Excluir lançamento</button>
             <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais podem ser excluídos.</div>
           </div>
@@ -1269,7 +1278,24 @@ def index():
           }}
           document.getElementById('modalBody').innerHTML = html;
           document.getElementById('modalAcoes').style.display = d._manual ? 'block' : 'none';
+          // reflete o estado atual de "duplicada" da linha correspondente
+          const trAtual = document.querySelector('tr[data-id="' + id + '"]');
+          const dupAtual = trAtual ? trAtual.querySelector('.dup-check') : null;
+          document.getElementById('modalDup').checked = dupAtual ? dupAtual.checked : false;
           document.getElementById('modalBg').classList.add('show');
+        }}
+        function toggleDuplicadaModal() {{
+          if (!idAtualModal) return;
+          const marcado = document.getElementById('modalDup').checked;
+          const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
+          if (!tr) return;
+          const dupCheck = tr.querySelector('.dup-check');
+          dupCheck.checked = marcado;
+          const obsInput = tr.querySelector('.obs-input');
+          if (marcado && !obsInput.value.trim()) {{
+            obsInput.value = DUPLICADA_OBS_PADRAO;
+          }}
+          salvar(idAtualModal, dupCheck);
         }}
         function fecharModal() {{
           document.getElementById('modalBg').classList.remove('show');
@@ -1333,14 +1359,6 @@ def index():
             }}
           }});
           filaSalvar[id] = atual;
-        }}
-        function toggleDuplicada(id, checkbox) {{
-          const tr = checkbox.closest('tr');
-          const obsInput = tr.querySelector('.obs-input');
-          if (checkbox.checked && !obsInput.value.trim()) {{
-            obsInput.value = DUPLICADA_OBS_PADRAO;
-          }}
-          salvar(id, checkbox);
         }}
         function toggleFormManual() {{
           const f = document.getElementById('formManual');
