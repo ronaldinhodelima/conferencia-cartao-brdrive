@@ -174,3 +174,7 @@ BRDrive disponíveis no ambiente (vendas, propostas comerciais, etc.) são de ou
    no `git credential helper` local, para não precisar colar o token a cada push.
 5. Para deploys, seguir o fluxo descrito em "Repositório e deploy" acima — o token do Coolify
    precisa ser configurado como variável de ambiente local (não commitado).
+
+## Deploy automático
+
+Webhook do GitHub -> Coolify configurado em 20/08/2026. Todo push na `main` dispara build/deploy sozinho, sem precisar chamar a API do Coolify manualmente.
