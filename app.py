@@ -1083,7 +1083,7 @@ BASE_CSS = BASE_CSS_HEAD + """
     align-items: center;
     border-bottom: 1px solid var(--line);
   }
-  .topbar > div:first-child { display: flex; align-items: baseline; gap: 9px; }
+  .topbar > div:first-child { display: flex; align-items: center; gap: 9px; }
   .marca { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; color: var(--ink); }
   .marca-box { display: flex; align-items: center; gap: 9px; }
   .marca-icon { width: 30px; height: 30px; border-radius: 8px; display: block; object-fit: cover; }
