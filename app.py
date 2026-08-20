@@ -1543,13 +1543,26 @@ def login():
           <img src="data:image/png;base64,{LOGO_HERO_B64}" alt="Pé de Meia" style="width:150px;height:auto;display:inline-block">
         </div>
         <h2 style="text-align:center">Pé de Meia</h2>
-        <form method="post">
-          <input name="usuario" placeholder="Usuario" autofocus>
-          <input name="senha" type="password" placeholder="Senha">
+        <form method="post" autocomplete="on">
+          <input name="usuario" placeholder="Usuario" autocomplete="username" autofocus>
+          <div style="position:relative">
+            <input id="campo-senha" name="senha" type="password" placeholder="Senha"
+                   autocomplete="current-password" style="width:100%;padding-right:36px;box-sizing:border-box">
+            <button type="button" onclick="mostrarSenha()"
+                    style="position:absolute;right:6px;top:50%;transform:translateY(-50%);
+                           background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px;color:var(--ink-faint)"
+                    aria-label="Mostrar senha" title="Mostrar senha">👁</button>
+          </div>
           <button type="submit">Entrar</button>
         </form>
         {err_html}
       </div>
+      <script>
+        function mostrarSenha() {{
+          const campo = document.getElementById('campo-senha');
+          campo.type = campo.type === 'password' ? 'text' : 'password';
+        }}
+      </script>
     </body></html>
     """
 
