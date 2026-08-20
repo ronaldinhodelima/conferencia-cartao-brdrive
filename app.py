@@ -167,6 +167,8 @@ FATURA_DIA_FECHAMENTO = 12
 # conta sintetica usada para lancamentos manuais (dinheiro em especie), fora do Pluggy
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
+APP_NOME = "Meu Dinheiro"
+
 MESES_ABREV = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 
 # ---- expressoes SQL reutilizaveis (exigem JOIN com cartao.conta c e LEFT JOIN categoria_natureza n)
@@ -898,7 +900,9 @@ BASE_CSS = """
     align-items: center;
     border-bottom: 1px solid var(--line);
   }
-  .topbar > div:first-child { font-weight: 600; font-size: 14.5px; letter-spacing: -0.01em; }
+  .topbar > div:first-child { display: flex; align-items: baseline; gap: 9px; }
+  .marca { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; color: var(--ink); }
+  .marca-pagina { font-size: 12.5px; color: var(--ink-faint); }
   .topbar a { color: var(--ink-soft); text-decoration: none; font-size: 13.5px; transition: color .15s; }
   .topbar a:hover { color: var(--ink); }
 
@@ -1131,7 +1135,10 @@ def topbar_html(titulo, ativo=None):
         return "ativo" if ativo == nome else ""
     return f"""
       <div class="topbar">
-        <div>{titulo} - {session.get('user')}</div>
+        <div>
+          <span class="marca">{APP_NOME}</span>
+          <span class="marca-pagina">{titulo} · {session.get('user')}</span>
+        </div>
         <div class="nav-menu">
           <a href="/" class="{cls('inicio')}">Lançamentos</a>
           <div class="dropdown">
@@ -1286,10 +1293,10 @@ def login():
         error = "Usuário ou senha inválidos."
     err_html = '<p class="err">' + error + '</p>' if error else ''
     return f"""
-    <html><head><title>Login - Conferencia de Cartao</title>{BASE_CSS}</head>
+    <html><head><title>Entrar · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       <div class="login-box">
-        <h2>Conferencia de Cartao</h2>
+        <h2>Meu Dinheiro</h2>
         <form method="post">
           <input name="usuario" placeholder="Usuario" autofocus>
           <input name="senha" type="password" placeholder="Senha">
@@ -1559,9 +1566,9 @@ def index():
     )
 
     return f"""
-    <html><head><title>Conferencia de Cartao</title>{BASE_CSS}</head>
+    <html><head><title>Lançamentos · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
-      {topbar_html('Conferência de Cartão', 'inicio')}
+      {topbar_html('Lançamentos', 'inicio')}
       <div class="wrap">
         <div class="filters" style="flex-wrap:wrap;gap:14px">
           <div>
@@ -2119,7 +2126,7 @@ def cartoes():
     cancelar_html = '<a href="/cartoes" style="margin-left:6px;font-size:13px">cancelar edicao</a>' if editando else ''
 
     return f"""
-    <html><head><title>Gerenciar Cartoes</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Cartoes · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Cartões', 'cartoes')}
       <div class="wrap">
@@ -2261,7 +2268,7 @@ def dimensoes_view():
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
 
     return f"""
-    <html><head><title>Gerenciar Dimensoes</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Dimensoes · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Dimensões', 'dimensoes')}
       <div class="wrap">
@@ -2453,7 +2460,7 @@ def regras_view():
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
 
     return f"""
-    <html><head><title>Regras Automaticas</title>{BASE_CSS}</head>
+    <html><head><title>Regras Automaticas · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Regras Automáticas', 'regras')}
       <div class="wrap">
@@ -2712,7 +2719,7 @@ def dre():
     corpo_dre = "".join(linhas_dre) or '<tr><td colspan="6" style="padding:18px;text-align:center;color:#888">Sem lançamentos neste ano.</td></tr>'
 
     return f"""
-    <html><head><title>DRE / Centro de Custos</title>{BASE_CSS}</head>
+    <html><head><title>DRE / Centro de Custos · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('DRE / Centro de Custos', 'dre')}
       <div class="wrap">
@@ -2896,7 +2903,7 @@ def grupos_view():
     )
 
     return f"""
-    <html><head><title>Gerenciar Grupos de Custo</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Grupos de Custo · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Grupos de Custo', 'grupos')}
       <div class="wrap">
@@ -3082,7 +3089,7 @@ def relatorios():
     )
 
     return f"""
-    <html><head><title>Relatórios</title>{BASE_CSS}
+    <html><head><title>Relatórios · Meu Dinheiro</title>{BASE_CSS}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     </head>
     <body>
@@ -3672,7 +3679,7 @@ def importar_view():
     )
 
     return f"""
-    <html><head><title>Importar extrato / fatura</title>{BASE_CSS}</head>
+    <html><head><title>Importar extrato / fatura · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Importar extrato / fatura', 'importar')}
       <div class="wrap">
@@ -3840,7 +3847,7 @@ def investimentos_view():
 
     if posicoes is None:
         return f"""
-        <html><head><title>Investimentos</title>{BASE_CSS}</head>
+        <html><head><title>Investimentos · Meu Dinheiro</title>{BASE_CSS}</head>
         <body>
           {topbar_html('Investimentos', 'investimentos')}
           <div class="wrap"><div class="cat-breakdown">
@@ -3931,7 +3938,7 @@ def investimentos_view():
         </div>"""
 
     return f"""
-    <html><head><title>Investimentos</title>{BASE_CSS}</head>
+    <html><head><title>Investimentos · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Investimentos', 'investimentos')}
       <div class="wrap">
@@ -4025,7 +4032,7 @@ def naturezas_view():
         )
 
     return f"""
-    <html><head><title>Naturezas</title>{BASE_CSS}</head>
+    <html><head><title>Naturezas · Meu Dinheiro</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Natureza das categorias', 'naturezas')}
       <div class="wrap">
