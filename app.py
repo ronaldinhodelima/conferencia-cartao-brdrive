@@ -1354,7 +1354,6 @@ def topbar_html(titulo, ativo=None):
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
             <div class="dropdown-content">
               {f'<a href="/categorias" class="{cls("categorias")}">Gerenciar categorias</a>' if pode("cadastros") else ""}
-              {f'<a href="/naturezas" class="{cls("naturezas")}">Natureza das categorias</a>' if pode("cadastros") else ""}
               {f'<a href="/grupos" class="{cls("grupos")}">Gerenciar grupos</a>' if pode("cadastros") else ""}
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
               {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
@@ -4348,7 +4347,18 @@ def categorias_view():
     if request.method == "POST":
         acao = request.form.get("acao")
         try:
-            if acao == "criar":
+            if acao == "natureza":
+                categoria = request.form.get("categoria")
+                natureza = request.form.get("natureza")
+                if categoria and natureza in NATUREZAS:
+                    cur.execute(
+                        "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                        "ON CONFLICT (categoria) DO UPDATE SET natureza = EXCLUDED.natureza;",
+                        (categoria, natureza),
+                    )
+                    conn.commit()
+
+            elif acao == "criar":
                 nome = (request.form.get("nome") or "").strip()
                 if not nome:
                     erro = "Informe o nome da categoria."
@@ -4418,6 +4428,9 @@ def categorias_view():
         "GROUP BY t.categoria;"
     )
     usadas = {r["categoria"]: r for r in cur.fetchall()}
+
+    cur.execute("SELECT categoria, natureza FROM cartao.categoria_natureza;")
+    naturezas_atuais = {r["categoria"]: r["natureza"] for r in cur.fetchall()}
     cur.close()
     conn.close()
 
@@ -4445,6 +4458,12 @@ def categorias_view():
             f'<span data-tip="Existem lançamentos nessa categoria. Mova-os para outra categoria antes de remover." '
             f'style="font-size:11px;color:var(--ink-faint);cursor:help">{qtd} lanç. — protegida</span>'
         )
+        nat = naturezas_atuais.get(c, NATUREZA_PADRAO)
+        opts_natureza = "".join(
+            f'<option value="{k}" {"selected" if k == nat else ""}>{v}</option>'
+            for k, v in NATUREZAS.items()
+        )
+        aviso_nat = "" if nat == "despesa" else '<span style="color:var(--ink-faint);font-size:11px"> fora do resultado</span>' if nat in NATUREZAS_NEUTRAS else ""
         return f"""
         <tr>
           <td>
@@ -4457,6 +4476,13 @@ def categorias_view():
           </td>
           <td class="valor">{qtd or "-"}</td>
           <td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="acao" value="natureza"><input type="hidden" name="categoria" value="{c}">
+              <select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">{opts_natureza}</select>
+              {aviso_nat}
+            </form>
+          </td>
           <td>
             <form method="post" style="display:flex;gap:6px;align-items:center">
               <input type="hidden" name="acao" value="mover"><input type="hidden" name="origem" value="{c}">
@@ -4488,16 +4514,31 @@ def categorias_view():
             <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar categoria</button>
           </form>
         </div>
+        <details class="cat-breakdown">
+          <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">O que é cada natureza?</summary>
+          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
+            O DRE mede o <strong>resultado</strong> do período: Receitas − Despesas. Nem todo dinheiro que sai é despesa.
+            <ul style="margin:8px 0 0 0;padding-left:18px">
+              <li><strong>Receita</strong> — entra e aumenta seu patrimônio (salário, PIX recebido, depósitos).</li>
+              <li><strong>Despesa</strong> — sai e não volta: consumo, juros, tarifas. É o que reduz o resultado.</li>
+              <li><strong>Investimento</strong> — aplicação financeira, previdência. Você continua com o dinheiro, em outra forma. Não é despesa.</li>
+              <li><strong>Aquisição de bem</strong> — terreno, veículo, imóvel. Troca de dinheiro por bem: não entra no resultado.
+                  O que entraria é a depreciação (e terreno não deprecia).</li>
+              <li><strong>Transferência</strong> — pagamento de fatura do cartão, movimentação entre contas próprias. Só troca de bolso.</li>
+              <li><strong>Depende da direção</strong> — PIX, TED, dinheiro: o que entra vira receita, o que sai vira despesa.</li>
+            </ul>
+          </div>
+        </details>
         <div class="cat-breakdown">
           <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
-            Renomeie, mova lançamentos entre categorias ou remova categorias vazias.
+            Renomeie, defina a natureza contábil, mova lançamentos entre categorias ou remova categorias vazias.
             Uma categoria só pode ser removida quando não tiver nenhum lançamento — mova os lançamentos para outra
             categoria primeiro, usando a coluna "Mover".
           </div>
           <table class="compacta">
             <thead><tr>
               <th>Categoria</th><th style="text-align:right">Lanç.</th>
-              <th style="text-align:right">Total</th><th>Mover lançamentos</th><th>Remover</th>
+              <th style="text-align:right">Total</th><th>Natureza</th><th>Mover lançamentos</th><th>Remover</th>
             </tr></thead>
             <tbody>{"".join(linha(c) for c in todas)}</tbody>
           </table>
@@ -4510,90 +4551,8 @@ def categorias_view():
 @app.route("/naturezas", methods=["GET", "POST"])
 @requer("cadastros")
 def naturezas_view():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    if request.method == "POST":
-        categoria = request.form.get("categoria")
-        natureza = request.form.get("natureza")
-        if categoria and natureza in NATUREZAS:
-            cur.execute(
-                "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
-                "ON CONFLICT (categoria) DO UPDATE SET natureza = EXCLUDED.natureza;",
-                (categoria, natureza),
-            )
-            conn.commit()
-
-    cur.execute("SELECT categoria, natureza FROM cartao.categoria_natureza;")
-    atual = {r["categoria"]: r["natureza"] for r in cur.fetchall()}
-
-    # so lista categorias que existem de fato nos lancamentos (+ as extras)
-    cur.execute(
-        f"SELECT t.categoria, COUNT(*) AS qtd, SUM({VAL_DESPESA}) AS total "
-        f"FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id "
-        "WHERE t.categoria IS NOT NULL AND COALESCE(t.duplicada, false) = false "
-        "GROUP BY t.categoria;"
-    )
-    usadas = {r["categoria"]: r for r in cur.fetchall()}
-    cur.close()
-    conn.close()
-
-    categorias = sorted((set(usadas) | set(CATEGORIAS_EXTRA) | set(atual) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS, key=lambda c: chave_alfa(cat_pt(c)))
-
-    def linha(c):
-        nat = atual.get(c, NATUREZA_PADRAO)
-        info = usadas.get(c)
-        qtd = info["qtd"] if info else 0
-        total = float(info["total"] or 0) if info else 0.0
-        opts = "".join(
-            f'<option value="{k}" {"selected" if k == nat else ""}>{v}</option>'
-            for k, v in NATUREZAS.items()
-        )
-        aviso = "" if nat == "despesa" else '<span style="color:var(--ink-faint);font-size:11px"> fora do resultado</span>' if nat in NATUREZAS_NEUTRAS else ""
-        return (
-            f'<tr>'
-            f'<td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{c}</div></td>'
-            f'<td class="valor">{qtd or "-"}</td>'
-            f'<td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>'
-            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
-            f'<input type="hidden" name="categoria" value="{c}">'
-            f'<select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">{opts}</select>'
-            f'{aviso}</form></td>'
-            f'</tr>'
-        )
-
-    return f"""
-    <html><head><title>Naturezas · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Natureza das categorias', 'naturezas')}
-      <div class="wrap">
-        <div class="cat-breakdown">
-          <h3>Como cada categoria entra no DRE</h3>
-          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7">
-            O DRE mede o <strong>resultado</strong> do período: Receitas − Despesas. Nem todo dinheiro que sai é despesa.
-            <ul style="margin:8px 0 0 0;padding-left:18px">
-              <li><strong>Receita</strong> — entra e aumenta seu patrimônio (salário, PIX recebido, depósitos).</li>
-              <li><strong>Despesa</strong> — sai e não volta: consumo, juros, tarifas. É o que reduz o resultado.</li>
-              <li><strong>Investimento</strong> — aplicação financeira, previdência. Você continua com o dinheiro, em outra forma. Não é despesa.</li>
-              <li><strong>Aquisição de bem</strong> — terreno, veículo, imóvel. Troca de dinheiro por bem: não entra no resultado.
-                  O que entraria é a depreciação (e terreno não deprecia).</li>
-              <li><strong>Transferência</strong> — pagamento de fatura do cartão, movimentação entre contas próprias. Só troca de bolso.</li>
-              <li><strong>Depende da direção</strong> — PIX, TED, dinheiro: o que entra vira receita, o que sai vira despesa.</li>
-            </ul>
-          </div>
-        </div>
-        <div class="cat-breakdown">
-          <table class="compacta">
-            <thead><tr>
-              <th>Categoria</th><th style="text-align:right">Lanç.</th>
-              <th style="text-align:right" title="Positivo = dinheiro saiu">Total</th><th>Natureza</th>
-            </tr></thead>
-            <tbody>{"".join(linha(c) for c in categorias)}</tbody>
-          </table>
-        </div>
-      </div>
-    </body></html>
-    """
+    # Fundido em /categorias (natureza contábil agora é uma coluna da mesma tela).
+    return redirect("/categorias")
 
 
 @app.route("/usuarios", methods=["GET", "POST"])
