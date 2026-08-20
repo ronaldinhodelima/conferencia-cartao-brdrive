@@ -198,17 +198,36 @@ NATUREZA_SQL = (
 # nomes de banco reconhecidos dentro do nome da conta/instituicao retornado pelo Pluggy
 # (o connector_name do Pluggy costuma ser generico, ex: "MeuPluggy", entao preferimos
 # procurar o nome real do banco dentro do nome da conta/instituicao)
+# o nome que o banco usa na razao social nem sempre e o nome comercial
+# (ex: a conta do Nubank vem como "Nu Pagamentos S.A."), entao mapeamos apelidos
 BANCOS_CONHECIDOS = (
-    "Unicred", "Nubank", "Itaú", "Itau", "Bradesco", "Santander", "Caixa",
-    "Banco do Brasil", "Inter", "C6 Bank", "C6", "PicPay", "Mercado Pago",
-    "BTG", "XP", "Sicoob", "Sicredi", "Original", "Neon", "Next", "Will Bank",
+    ("Nubank", ("nubank", "nu pagamentos", "nu financeira", "nu invest")),
+    ("Unicred", ("unicred",)),
+    ("Itaú", ("itau", "itaú")),
+    ("Bradesco", ("bradesco",)),
+    ("Santander", ("santander",)),
+    ("Caixa", ("caixa economica", "caixa econômica")),
+    ("Banco do Brasil", ("banco do brasil",)),
+    ("Inter", ("banco inter", "inter s.a", "intermedium")),
+    ("C6 Bank", ("c6 bank", "banco c6")),
+    ("PicPay", ("picpay",)),
+    ("Mercado Pago", ("mercado pago", "mercadopago")),
+    ("BTG", ("btg pactual", "btg")),
+    ("XP", ("xp investimentos", "banco xp")),
+    ("Sicoob", ("sicoob",)),
+    ("Sicredi", ("sicredi",)),
+    ("Neon", ("banco neon", "neon pagamentos")),
+    ("Will Bank", ("will bank", "willbank")),
+    ("Original", ("banco original",)),
+    ("Safra", ("safra",)),
+    ("Pan", ("banco pan",)),
 )
 
 
 def detectar_banco(nome_conta, connector_name):
-    texto = f"{nome_conta or ''} {connector_name or ''}".upper()
-    for banco in BANCOS_CONHECIDOS:
-        if banco.upper() in texto:
+    texto = f"{nome_conta or ''} {connector_name or ''}".lower()
+    for banco, apelidos in BANCOS_CONHECIDOS:
+        if any(a in texto for a in apelidos):
             return banco
     return connector_name or nome_conta or "Banco"
 
