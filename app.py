@@ -1640,6 +1640,13 @@ def index():
             opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
         return "".join(opts)
 
+    # a tela nao deve oferecer acao que a API vai recusar
+    pode_editar = pode("lancamentos_editar")
+    pode_conferir = pode("lancamentos_conferir")
+    pode_manual = pode("lancamentos_manual")
+    dis_editar = "" if pode_editar else " disabled"
+    dis_conferir = "" if pode_conferir else " disabled"
+
     trs = []
     detalhes_js = {}
     for r in rows:
@@ -1673,7 +1680,7 @@ def index():
             faltando = d["obrigatoria"] and not valor_sel
             estilo = ' style="border-color:#c23c34;background:#fbeceb"' if faltando else ""
             dim_tds.append(
-                f'<td class="cel-dim"><select class="dim-select" data-dim="{d["id"]}"{estilo} '
+                f'<td class="cel-dim"><select class="dim-select" data-dim="{d["id"]}"{estilo}{dis_editar} '
                 f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
             )
             nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
@@ -1684,11 +1691,11 @@ def index():
             f'<td class="cel-data" data-tip="{data_fmt_full}">{data_fmt}</td>'
             f'<td class="cel-desc" data-tip="{desc}">{desc}</td>'
             f'<td class="cel-origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
-            f'<td class="cel-dim"><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
+            f'<td class="cel-dim"><select class="cat-select"{dis_editar} onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
             f'<td class="valor cel-valor" style="{cor_valor}">{valor_fmt}</td>'
-            f'<td class="cel-obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..." onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked} onchange="salvar(\'{rid}\', this)">'
+            f'<td class="cel-obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..."{dis_editar} onblur="salvar(\'{rid}\', this)"></td>'
+            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked}{dis_conferir} onchange="salvar(\'{rid}\', this)">'
             f'<input class="dup-check" type="checkbox" {dup_checked} hidden></td>'
             f'<td class="cel-status"><span class="status" id="status-{rid}">ok</span></td>'
             f'</tr>'
@@ -1754,12 +1761,10 @@ def index():
           </div>
           {origem_filtro_html}
           <div class="chips-sel" id="chipsSel"></div>
-          <div style="margin-left:auto">
-            <button type="button" onclick="toggleFormManual()">+ Lançamento manual</button>
-          </div>
+          {'<div style="margin-left:auto"><button type="button" onclick="toggleFormManual()">+ Lançamento manual</button></div>' if pode_manual else ""}
         </div>
 
-        <div id="formManual" class="cat-breakdown" style="display:none">
+        <div id="formManual" class="cat-breakdown" style="display:none" {"hidden" if not pode_manual else ""}>
           <h3>Novo lançamento manual (dinheiro)</h3>
           <form onsubmit="return salvarManual(event)" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="date" id="manualData" required value="{datetime.now().strftime('%Y-%m-%d')}" style="padding:7px 9px;border:1px solid var(--line);border-radius:6px">
@@ -1823,7 +1828,7 @@ def index():
             </div>
           </div>
           <div id="modalAcoes" style="margin-top:14px;display:none">
-            <button type="button" class="btn-perigo" onclick="excluirManual()">Excluir lançamento</button>
+            <button type="button" class="btn-perigo" onclick="excluirManual()"{"" if pode_manual else " disabled"}>Excluir lançamento</button>
             <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais ou importados de arquivo podem ser excluídos.</div>
           </div>
         </div>
