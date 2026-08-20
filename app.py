@@ -21,7 +21,7 @@ app = Flask(__name__)
 # URL do serviço bussola-financeira-app que faz a sincronizacao com o Pluggy.
 # Pode ser sobrescrita via env var caso o dominio mude.
 BUSSOLA_SYNC_URL = os.environ.get(
-    "BUSSOLA_SYNC_URL", "https://o9eitr54t888rej2cjjpak8y.coolify.brdrive.net/sync"
+    "BUSSOLA_SYNC_URL", "https://hdgffcvh3ljqe61dczztaycz.coolify.brdrive.net/sync"
 )
 app.secret_key = os.environ.get("SECRET_KEY", "troque-isto-em-producao")
 
