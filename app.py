@@ -1,9 +1,11 @@
 import os
 import csv
 import functools
+import hashlib
 import io
 import json
 import re
+import secrets
 import uuid
 import urllib.request
 import urllib.error
@@ -22,10 +24,95 @@ BUSSOLA_SYNC_URL = os.environ.get(
 )
 app.secret_key = os.environ.get("SECRET_KEY", "troque-isto-em-producao")
 
+# usuarios iniciais (env). Servem apenas para criar os primeiros acessos:
+# depois do primeiro boot os usuarios passam a viver na tabela cartao.usuario,
+# com senha guardada em hash. Trocar a senha pela tela nao depende mais da env.
 USERS = {
     os.environ.get("APP_USER_1", "ronaldo"): os.environ.get("APP_PASS_1", "changeme1"),
     os.environ.get("APP_USER_2", "andrea"): os.environ.get("APP_PASS_2", "changeme2"),
 }
+
+# ---------------------------------------------------------------------------
+# Permissoes: cada acao do sistema que pode ser liberada ou bloqueada.
+# ---------------------------------------------------------------------------
+PERMISSOES = {
+    "lancamentos_ver": ("Ver lançamentos", "Abrir a tela de lançamentos e consultar o que foi gasto."),
+    "lancamentos_editar": ("Editar lançamentos", "Mudar categoria, responsável, projeto, observação e marcar duplicadas."),
+    "lancamentos_conferir": ("Conferir lançamentos", "Marcar um lançamento como conferido."),
+    "lancamentos_manual": ("Lançar dinheiro manual", "Criar e excluir lançamentos em espécie."),
+    "importar": ("Importar extrato / fatura", "Subir arquivos OFX e CSV para completar períodos."),
+    "relatorios": ("Ver relatórios", "Relatórios, DRE e investimentos."),
+    "cadastros": ("Gerenciar cadastros", "Grupos de custo, dimensões, regras automáticas, cartões e naturezas."),
+    "sincronizar": ("Sincronizar com o banco", "Usar o botão Atualizar agora."),
+    "usuarios": ("Gerenciar usuários", "Criar usuários, trocar senhas e definir permissões."),
+}
+
+# perfis prontos - atalho para nao precisar marcar permissao por permissao
+PERFIS = {
+    "admin": ("Administrador", list(PERMISSOES.keys())),
+    "operador": ("Operador", [
+        "lancamentos_ver", "lancamentos_editar", "lancamentos_conferir",
+        "lancamentos_manual", "importar", "relatorios", "sincronizar",
+    ]),
+    "leitura": ("Somente leitura", ["lancamentos_ver", "relatorios"]),
+}
+
+
+def hash_senha(senha, salt=None):
+    """Guarda a senha como hash PBKDF2 - a senha em si nunca fica salva."""
+    salt = salt or secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", senha.encode(), salt.encode(), 200_000)
+    return f"pbkdf2$200000${salt}${dk.hex()}"
+
+
+def senha_confere(senha, guardado):
+    try:
+        _, iteracoes, salt, esperado = (guardado or "").split("$")
+        dk = hashlib.pbkdf2_hmac("sha256", senha.encode(), salt.encode(), int(iteracoes))
+        return secrets.compare_digest(dk.hex(), esperado)
+    except (ValueError, AttributeError):
+        return False
+
+
+def permissoes_do_perfil(perfil, extras=None):
+    base = list(PERFIS.get(perfil, PERFIS["leitura"])[1])
+    for p in (extras or []):
+        if p in PERMISSOES and p not in base:
+            base.append(p)
+    return base
+
+
+def pode(permissao):
+    """Permissao do usuario logado na sessao."""
+    return permissao in (session.get("permissoes") or [])
+
+
+def requer(permissao):
+    """Bloqueia a rota para quem nao tem a permissao."""
+    def decorador(view):
+        @functools.wraps(view)
+        def wrapped(*args, **kwargs):
+            if not session.get("user"):
+                return redirect("/login")
+            if not pode(permissao):
+                titulo, _ = PERMISSOES.get(permissao, (permissao, ""))
+                if request.path.startswith("/api/"):
+                    return jsonify({"ok": False, "erro": f"Sem permissão para: {titulo}"}), 403
+                return f"""
+                <html><head><title>Sem permissão · {APP_NOME}</title>{BASE_CSS}</head>
+                <body>{topbar_html('Sem permissão')}
+                  <div class="wrap"><div class="cat-breakdown">
+                    <h3>Você não tem acesso a esta área</h3>
+                    <div style="font-size:13px;color:var(--ink-soft)">
+                      Esta tela exige a permissão <strong>{titulo}</strong>.
+                      Peça a um administrador para liberar em Configurações → Usuários e permissões.
+                    </div>
+                  </div></div>
+                </body></html>
+                """, 403
+            return view(*args, **kwargs)
+        return wrapped
+    return decorador
 
 CATEGORIA_PT = {
     "Accomodation": "Hospedagem",
@@ -167,7 +254,7 @@ FATURA_DIA_FECHAMENTO = 12
 # conta sintetica usada para lancamentos manuais (dinheiro em especie), fora do Pluggy
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
-APP_NOME = "Meu Dinheiro"
+APP_NOME = "Pé de Meia"
 
 MESES_ABREV = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 
@@ -630,6 +717,34 @@ def migrate():
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS natureza text;")
         # renomeia a dimensao antiga (nao roda de novo depois de renomeada)
         cur.execute("UPDATE cartao.dimensao SET nome = 'Projeto' WHERE nome = 'Projeto / Evento';")
+
+        # usuarios e permissoes. A senha fica em hash - nunca em texto puro.
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.usuario ("
+            "usuario text PRIMARY KEY, "
+            "nome text, "
+            "senha_hash text NOT NULL, "
+            "perfil text NOT NULL DEFAULT 'leitura', "
+            "permissoes text[] NOT NULL DEFAULT '{}', "
+            "ativo boolean NOT NULL DEFAULT true, "
+            "criado_em timestamptz DEFAULT now(), "
+            "ultimo_acesso timestamptz);"
+        )
+        conn.commit()
+
+        # primeiro boot: cria os acessos que hoje vivem nas variaveis de ambiente,
+        # ja como administradores, para ninguem ficar de fora do sistema
+        cur.execute("SELECT COUNT(*) FROM cartao.usuario;")
+        if cur.fetchone()[0] == 0:
+            for login, senha in USERS.items():
+                if not login:
+                    continue
+                cur.execute(
+                    "INSERT INTO cartao.usuario (usuario, nome, senha_hash, perfil, permissoes) "
+                    "VALUES (%s,%s,%s,'admin',%s) ON CONFLICT (usuario) DO NOTHING;",
+                    (login, login.capitalize(), hash_senha(senha), permissoes_do_perfil("admin")),
+                )
+            conn.commit()
         cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
@@ -988,6 +1103,25 @@ BASE_CSS = """
   .cel-origem { display: flex; align-items: center; }
   .cel-origem > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* ---------- usuarios e permissoes ---------- */
+  .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px; }
+  .perm-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface);
+  }
+  .perm-item:hover { border-color: var(--ink-faint); }
+  .perm-item input { accent-color: var(--accent); width: 15px; height: 15px; }
+  .perm-item:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .tag-ativo, .tag-inativo {
+    font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 20px; text-transform: uppercase; letter-spacing: .03em;
+  }
+  .tag-ativo { background: var(--good-soft); color: var(--good); }
+  .tag-inativo { background: var(--bad-soft); color: var(--bad); }
+  .aviso-ok, .aviso-erro { padding: 11px 15px; border-radius: var(--radius); font-size: 13.5px; margin-bottom: 16px; }
+  .aviso-ok { background: var(--good-soft); color: var(--good); border: 1px solid #cfe9d9; }
+  .aviso-erro { background: var(--bad-soft); color: var(--bad); border: 1px solid #f2d3d0; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
   /* ---------- tooltip proprio (o nativo do navegador demora ~1s) ---------- */
   #tooltip {
     position: fixed; z-index: 9999; pointer-events: none;
@@ -1140,31 +1274,32 @@ def topbar_html(titulo, ativo=None):
           <span class="marca-pagina">{titulo} · {session.get('user')}</span>
         </div>
         <div class="nav-menu">
-          <a href="/" class="{cls('inicio')}">Lançamentos</a>
-          <div class="dropdown">
+          {f'<a href="/" class="{cls("inicio")}">Lançamentos</a>' if pode("lancamentos_ver") else ""}
+          {f'''<div class="dropdown">
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Relatórios ▾</button>
             <div class="dropdown-content">
               <a href="/relatorios" class="{cls('relatorios')}">Relatórios</a>
               <a href="/dre" class="{cls('dre')}">DRE / Centro de Custos</a>
               <a href="/investimentos" class="{cls('investimentos')}">Investimentos</a>
             </div>
-          </div>
-          <div class="dropdown">
+          </div>''' if pode("relatorios") else ""}
+          {f'''<div class="dropdown">
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
             <div class="dropdown-content">
-              <a href="/naturezas" class="{cls('naturezas')}">Natureza das categorias</a>
-              <a href="/grupos" class="{cls('grupos')}">Gerenciar grupos</a>
-              <a href="/dimensoes" class="{cls('dimensoes')}">Gerenciar dimensões</a>
-              <a href="/regras" class="{cls('regras')}">Regras automáticas</a>
-              <a href="/cartoes" class="{cls('cartoes')}">Gerenciar cartões</a>
-              <a href="/importar" class="{cls('importar')}">Importar extrato / fatura</a>
+              {f'<a href="/naturezas" class="{cls("naturezas")}">Natureza das categorias</a>' if pode("cadastros") else ""}
+              {f'<a href="/grupos" class="{cls("grupos")}">Gerenciar grupos</a>' if pode("cadastros") else ""}
+              {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
+              {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
+              {f'<a href="/cartoes" class="{cls("cartoes")}">Gerenciar cartões</a>' if pode("cadastros") else ""}
+              {f'<a href="/importar" class="{cls("importar")}">Importar extrato / fatura</a>' if pode("importar") else ""}
+              {f'<a href="/usuarios" class="{cls("usuarios")}">Usuários e permissões</a>' if pode("usuarios") else ""}
             </div>
-          </div>
-          <div class="sync-widget">
+          </div>''' if (pode("cadastros") or pode("importar") or pode("usuarios")) else ""}
+          {'''<div class="sync-widget">
             <span class="sync-dot" id="syncDot"></span>
             <span id="syncTexto">Verificando...</span>
             <button class="sync-btn" id="syncBtn" onclick="dispararSync()">Atualizar agora</button>
-          </div>
+          </div>''' if pode("sincronizar") else ""}
           <a href="/logout">Sair</a>
         </div>
       </div>
@@ -1246,6 +1381,8 @@ def topbar_html(titulo, ativo=None):
           return txt;
         }}
         async function syncCarregarStatus() {{
+          // o widget so existe para quem tem permissao de sincronizar
+          if (!document.getElementById('syncTexto')) return;
           try {{
             const r = await fetch('/api/sync-status');
             const d = await r.json();
@@ -1285,18 +1422,50 @@ def topbar_html(titulo, ativo=None):
 def login():
     error = None
     if request.method == "POST":
-        u = request.form.get("usuario", "")
+        u = (request.form.get("usuario", "") or "").strip()
         p = request.form.get("senha", "")
-        if u in USERS and USERS[u] == p:
+        conta = None
+        try:
+            conn = get_conn()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                "SELECT usuario, nome, senha_hash, perfil, permissoes, ativo "
+                "FROM cartao.usuario WHERE lower(usuario) = lower(%s);",
+                (u,),
+            )
+            conta = cur.fetchone()
+            if conta and conta["ativo"] and senha_confere(p, conta["senha_hash"]):
+                cur.execute("UPDATE cartao.usuario SET ultimo_acesso = now() WHERE usuario = %s;",
+                            (conta["usuario"],))
+                conn.commit()
+                session["user"] = conta["usuario"]
+                session["nome"] = conta["nome"] or conta["usuario"]
+                session["perfil"] = conta["perfil"]
+                session["permissoes"] = list(conta["permissoes"] or [])
+                cur.close()
+                conn.close()
+                return redirect("/")
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print("Aviso: falha ao autenticar pelo banco:", e)
+
+        # rede de seguranca: se a tabela ainda nao existe (primeiro boot), aceita a env
+        if conta is None and u in USERS and USERS[u] == p:
             session["user"] = u
+            session["nome"] = u
+            session["perfil"] = "admin"
+            session["permissoes"] = permissoes_do_perfil("admin")
             return redirect("/")
-        error = "Usuário ou senha inválidos."
+
+        error = "Usuário ou senha inválidos." if not (conta and not conta["ativo"]) \
+            else "Este acesso está desativado. Fale com um administrador."
     err_html = '<p class="err">' + error + '</p>' if error else ''
     return f"""
-    <html><head><title>Entrar · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Entrar · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       <div class="login-box">
-        <h2>Meu Dinheiro</h2>
+        <h2>Pé de Meia</h2>
         <form method="post">
           <input name="usuario" placeholder="Usuario" autofocus>
           <input name="senha" type="password" placeholder="Senha">
@@ -1321,7 +1490,7 @@ def api_sync_status():
 
 
 @app.route("/api/sync-agora", methods=["POST"])
-@login_required
+@requer("sincronizar")
 def api_sync_agora():
     ok, erro = disparar_sincronizacao()
     if not ok:
@@ -1330,7 +1499,7 @@ def api_sync_agora():
 
 
 @app.route("/")
-@login_required
+@requer("lancamentos_ver")
 def index():
     mes = request.args.get("mes") or datetime.now().strftime("%Y-%m")
     status = request.args.get("status", "todas")
@@ -1566,7 +1735,7 @@ def index():
     )
 
     return f"""
-    <html><head><title>Lançamentos · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Lançamentos · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Lançamentos', 'inicio')}
       <div class="wrap">
@@ -1929,7 +2098,7 @@ def index():
 
 
 @app.route("/api/lancamento-manual", methods=["POST"])
-@login_required
+@requer("lancamentos_manual")
 def lancamento_manual():
     data = request.get_json(force=True)
     try:
@@ -1965,7 +2134,7 @@ def lancamento_manual():
 
 
 @app.route("/api/lancamento-manual/<transacao_id>", methods=["DELETE"])
-@login_required
+@requer("lancamentos_manual")
 def excluir_lancamento_manual(transacao_id):
     """Exclui um lancamento criado manualmente ou importado de arquivo. Transacoes vindas do
     Pluggy nunca sao apagadas (elas voltariam na proxima sincronizacao)."""
@@ -2002,7 +2171,7 @@ def excluir_lancamento_manual(transacao_id):
 
 
 @app.route("/api/transacao/<transacao_id>", methods=["POST"])
-@login_required
+@requer("lancamentos_editar")
 def update_transacao(transacao_id):
     data = request.get_json(force=True)
     conn = get_conn()
@@ -2061,7 +2230,7 @@ def update_transacao(transacao_id):
 
 
 @app.route("/cartoes", methods=["GET", "POST"])
-@login_required
+@requer("cadastros")
 def cartoes():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2126,7 +2295,7 @@ def cartoes():
     cancelar_html = '<a href="/cartoes" style="margin-left:6px;font-size:13px">cancelar edicao</a>' if editando else ''
 
     return f"""
-    <html><head><title>Gerenciar Cartoes · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Cartoes · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Cartões', 'cartoes')}
       <div class="wrap">
@@ -2158,7 +2327,7 @@ def cartoes():
 
 
 @app.route("/dimensoes", methods=["GET", "POST"])
-@login_required
+@requer("cadastros")
 def dimensoes_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2268,7 +2437,7 @@ def dimensoes_view():
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
 
     return f"""
-    <html><head><title>Gerenciar Dimensoes · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Dimensoes · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Dimensões', 'dimensoes')}
       <div class="wrap">
@@ -2294,7 +2463,7 @@ def dimensoes_view():
 
 
 @app.route("/regras", methods=["GET", "POST"])
-@login_required
+@requer("cadastros")
 def regras_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2460,7 +2629,7 @@ def regras_view():
     erro_html = f'<p class="err">{erro}</p>' if erro else ''
 
     return f"""
-    <html><head><title>Regras Automaticas · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Regras Automaticas · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Regras Automáticas', 'regras')}
       <div class="wrap">
@@ -2515,7 +2684,7 @@ def _barra_html(realizado, teto):
 
 
 @app.route("/dre")
-@login_required
+@requer("relatorios")
 def dre():
     ano = request.args.get("ano") or str(datetime.now().year)
     hoje = datetime.now()
@@ -2719,7 +2888,7 @@ def dre():
     corpo_dre = "".join(linhas_dre) or '<tr><td colspan="6" style="padding:18px;text-align:center;color:#888">Sem lançamentos neste ano.</td></tr>'
 
     return f"""
-    <html><head><title>DRE / Centro de Custos · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>DRE / Centro de Custos · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('DRE / Centro de Custos', 'dre')}
       <div class="wrap">
@@ -2769,7 +2938,7 @@ def dre():
 
 
 @app.route("/grupos", methods=["GET", "POST"])
-@login_required
+@requer("cadastros")
 def grupos_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2903,7 +3072,7 @@ def grupos_view():
     )
 
     return f"""
-    <html><head><title>Gerenciar Grupos de Custo · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Gerenciar Grupos de Custo · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Gerenciar Grupos de Custo', 'grupos')}
       <div class="wrap">
@@ -3037,7 +3206,7 @@ def _montar_filtro_relatorio(dimensoes):
 
 
 @app.route("/relatorios")
-@login_required
+@requer("relatorios")
 def relatorios():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3089,7 +3258,7 @@ def relatorios():
     )
 
     return f"""
-    <html><head><title>Relatórios · Meu Dinheiro</title>{BASE_CSS}
+    <html><head><title>Relatórios · Pé de Meia</title>{BASE_CSS}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     </head>
     <body>
@@ -3383,7 +3552,7 @@ def relatorios():
 
 
 @app.route("/relatorios/dados")
-@login_required
+@requer("relatorios")
 def relatorios_dados():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3475,7 +3644,7 @@ def relatorios_dados():
 
 
 @app.route("/relatorios/lancamentos")
-@login_required
+@requer("relatorios")
 def relatorios_lancamentos():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3556,7 +3725,7 @@ def _ler_arquivo_importacao(arquivo):
 
 
 @app.route("/api/importar/preview", methods=["POST"])
-@login_required
+@requer("importar")
 def importar_preview():
     arquivo = request.files.get("arquivo")
     account_id = request.form.get("origem")
@@ -3620,7 +3789,7 @@ def importar_preview():
 
 
 @app.route("/api/importar/confirmar", methods=["POST"])
-@login_required
+@requer("importar")
 def importar_confirmar():
     dados = request.get_json(force=True)
     account_id = dados.get("origem")
@@ -3666,7 +3835,7 @@ def importar_confirmar():
 
 
 @app.route("/importar")
-@login_required
+@requer("importar")
 def importar_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3679,7 +3848,7 @@ def importar_view():
     )
 
     return f"""
-    <html><head><title>Importar extrato / fatura · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Importar extrato / fatura · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Importar extrato / fatura', 'importar')}
       <div class="wrap">
@@ -3812,7 +3981,7 @@ def importar_view():
 
 
 @app.route("/investimentos")
-@login_required
+@requer("relatorios")
 def investimentos_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -3847,7 +4016,7 @@ def investimentos_view():
 
     if posicoes is None:
         return f"""
-        <html><head><title>Investimentos · Meu Dinheiro</title>{BASE_CSS}</head>
+        <html><head><title>Investimentos · Pé de Meia</title>{BASE_CSS}</head>
         <body>
           {topbar_html('Investimentos', 'investimentos')}
           <div class="wrap"><div class="cat-breakdown">
@@ -3938,7 +4107,7 @@ def investimentos_view():
         </div>"""
 
     return f"""
-    <html><head><title>Investimentos · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Investimentos · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Investimentos', 'investimentos')}
       <div class="wrap">
@@ -3977,7 +4146,7 @@ def investimentos_view():
 
 
 @app.route("/naturezas", methods=["GET", "POST"])
-@login_required
+@requer("cadastros")
 def naturezas_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -4032,7 +4201,7 @@ def naturezas_view():
         )
 
     return f"""
-    <html><head><title>Naturezas · Meu Dinheiro</title>{BASE_CSS}</head>
+    <html><head><title>Naturezas · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Natureza das categorias', 'naturezas')}
       <div class="wrap">
@@ -4061,6 +4230,227 @@ def naturezas_view():
           </table>
         </div>
       </div>
+    </body></html>
+    """
+
+
+@app.route("/usuarios", methods=["GET", "POST"])
+@requer("usuarios")
+def usuarios_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    aviso = erro = None
+
+    def total_admins_ativos(excluindo=None):
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM cartao.usuario "
+            "WHERE ativo = true AND 'usuarios' = ANY(permissoes) AND usuario <> %s;",
+            (excluindo or "",),
+        )
+        return cur.fetchone()["n"]
+
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        alvo = (request.form.get("usuario") or "").strip()
+        try:
+            if acao == "criar":
+                login = (request.form.get("novo_usuario") or "").strip().lower()
+                senha = request.form.get("nova_senha") or ""
+                perfil = request.form.get("perfil") or "leitura"
+                if not login or not senha:
+                    erro = "Informe usuário e senha."
+                elif len(senha) < 6:
+                    erro = "A senha precisa ter pelo menos 6 caracteres."
+                else:
+                    cur.execute(
+                        "INSERT INTO cartao.usuario (usuario, nome, senha_hash, perfil, permissoes) "
+                        "VALUES (%s,%s,%s,%s,%s) ON CONFLICT (usuario) DO NOTHING RETURNING usuario;",
+                        (login, (request.form.get("novo_nome") or login.capitalize()).strip(),
+                         hash_senha(senha), perfil, permissoes_do_perfil(perfil)),
+                    )
+                    aviso = f'Usuário "{login}" criado.' if cur.fetchone() else "Já existe um usuário com esse login."
+
+            elif acao == "permissoes":
+                perfil = request.form.get("perfil") or "leitura"
+                marcadas = [p for p in request.form.getlist("perm") if p in PERMISSOES]
+                # nao deixa tirar o proprio acesso de gerenciar usuarios
+                if alvo == session.get("user") and "usuarios" not in marcadas:
+                    erro = "Você não pode remover a sua própria permissão de gerenciar usuários."
+                elif "usuarios" not in marcadas and total_admins_ativos(alvo) == 0:
+                    erro = "É preciso ter ao menos um administrador com acesso a usuários."
+                else:
+                    cur.execute(
+                        "UPDATE cartao.usuario SET perfil = %s, permissoes = %s, nome = %s WHERE usuario = %s;",
+                        (perfil, marcadas, (request.form.get("nome") or "").strip() or alvo, alvo),
+                    )
+                    aviso = f'Permissões de "{alvo}" atualizadas.'
+
+            elif acao == "senha":
+                nova = request.form.get("senha") or ""
+                if len(nova) < 6:
+                    erro = "A senha precisa ter pelo menos 6 caracteres."
+                else:
+                    cur.execute("UPDATE cartao.usuario SET senha_hash = %s WHERE usuario = %s;",
+                                (hash_senha(nova), alvo))
+                    aviso = f'Senha de "{alvo}" alterada.'
+
+            elif acao == "ativar":
+                ativo = request.form.get("ativo") == "1"
+                if not ativo and alvo == session.get("user"):
+                    erro = "Você não pode desativar o seu próprio acesso."
+                elif not ativo and total_admins_ativos(alvo) == 0:
+                    erro = "É preciso manter ao menos um administrador ativo."
+                else:
+                    cur.execute("UPDATE cartao.usuario SET ativo = %s WHERE usuario = %s;", (ativo, alvo))
+                    aviso = f'Acesso de "{alvo}" ' + ("reativado." if ativo else "desativado.")
+
+            elif acao == "excluir":
+                if alvo == session.get("user"):
+                    erro = "Você não pode excluir o seu próprio usuário."
+                elif total_admins_ativos(alvo) == 0:
+                    erro = "É preciso manter ao menos um administrador."
+                else:
+                    cur.execute("DELETE FROM cartao.usuario WHERE usuario = %s;", (alvo,))
+                    aviso = f'Usuário "{alvo}" excluído.'
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            erro = str(e)
+
+    cur.execute(
+        "SELECT usuario, nome, perfil, permissoes, ativo, criado_em, ultimo_acesso "
+        "FROM cartao.usuario ORDER BY ativo DESC, usuario;"
+    )
+    contas = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    def perfil_options(atual):
+        return "".join(
+            f'<option value="{k}" {"selected" if k == atual else ""}>{v[0]}</option>'
+            for k, v in PERFIS.items()
+        )
+
+    def _dt(v):
+        return v.strftime("%d/%m/%Y %H:%M") if v else "nunca"
+
+    blocos = []
+    for c in contas:
+        perms = list(c["permissoes"] or [])
+        eu = c["usuario"] == session.get("user")
+        checks = "".join(
+            f'<label class="perm-item" data-tip="{desc}">'
+            f'<input type="checkbox" name="perm" value="{chave}" {"checked" if chave in perms else ""}>'
+            f'<span>{titulo}</span></label>'
+            for chave, (titulo, desc) in PERMISSOES.items()
+        )
+        estado = ('<span class="tag-ativo">ativo</span>' if c["ativo"]
+                  else '<span class="tag-inativo">desativado</span>')
+        blocos.append(f"""
+        <details class="cat-breakdown" style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:10px">
+            <strong style="font-size:14px">{c["nome"] or c["usuario"]}</strong>
+            <span style="color:var(--ink-faint);font-size:12.5px">{c["usuario"]}</span>
+            {estado}
+            <span style="color:var(--ink-faint);font-size:11.5px">{PERFIS.get(c["perfil"], ("Personalizado",))[0]}</span>
+            <span style="margin-left:auto;color:var(--ink-faint);font-size:11.5px">
+              último acesso: {_dt(c["ultimo_acesso"])}</span>
+          </summary>
+          <div style="padding:0 18px 18px 18px">
+            <form method="post">
+              <input type="hidden" name="acao" value="permissoes">
+              <input type="hidden" name="usuario" value="{c["usuario"]}">
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+                <input name="nome" value="{c["nome"] or ""}" placeholder="Nome"
+                       style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:190px">
+                <span style="font-size:12px;color:var(--ink-faint)">Perfil</span>
+                <select name="perfil" onchange="aplicarPerfil(this)" data-usuario="{c["usuario"]}"
+                        style="padding:7px 9px">{perfil_options(c["perfil"])}</select>
+                <span style="font-size:11.5px;color:var(--ink-faint)">
+                  escolher um perfil marca as permissões dele; depois você pode ajustar uma a uma
+                </span>
+              </div>
+              <div class="perm-grid" data-usuario="{c["usuario"]}">{checks}</div>
+              <button type="submit" style="margin-top:12px">Salvar permissões</button>
+            </form>
+
+            <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft)">
+              <form method="post" style="display:flex;gap:8px;align-items:center">
+                <input type="hidden" name="acao" value="senha">
+                <input type="hidden" name="usuario" value="{c["usuario"]}">
+                <input name="senha" type="password" placeholder="Nova senha" minlength="6"
+                       style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+                <button type="submit" class="ver-btn">Trocar senha</button>
+              </form>
+              <form method="post" style="display:flex;align-items:center">
+                <input type="hidden" name="acao" value="ativar">
+                <input type="hidden" name="usuario" value="{c["usuario"]}">
+                <input type="hidden" name="ativo" value="{'0' if c["ativo"] else '1'}">
+                <button type="submit" class="ver-btn" {"disabled" if eu else ""}>
+                  {"Desativar acesso" if c["ativo"] else "Reativar acesso"}</button>
+              </form>
+              <form method="post" onsubmit="return confirm('Excluir o usuário {c["usuario"]}? Esta ação não pode ser desfeita.')">
+                <input type="hidden" name="acao" value="excluir">
+                <input type="hidden" name="usuario" value="{c["usuario"]}">
+                <button type="submit" class="btn-perigo" {"disabled" if eu else ""}>Excluir</button>
+              </form>
+            </div>
+          </div>
+        </details>""")
+
+    msg = ""
+    if aviso:
+        msg = f'<div class="aviso-ok">{aviso}</div>'
+    if erro:
+        msg = f'<div class="aviso-erro">{erro}</div>'
+
+    legenda = "".join(
+        f'<div class="cat-row"><span><strong>{t}</strong></span><span style="color:var(--ink-soft);font-size:12.5px">{d}</span></div>'
+        for t, d in PERMISSOES.values()
+    )
+
+    return f"""
+    <html><head><title>Usuários e permissões · {APP_NOME}</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Usuários e permissões', 'usuarios')}
+      <div class="wrap">
+        {msg}
+        <div class="cat-breakdown">
+          <h3>Novo usuário</h3>
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="criar">
+            <input name="novo_usuario" placeholder="Login (ex: joao)" required
+                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+            <input name="novo_nome" placeholder="Nome"
+                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:180px">
+            <input name="nova_senha" type="password" placeholder="Senha (mín. 6)" minlength="6" required
+                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+            <select name="perfil" style="padding:7px 9px">{perfil_options("operador")}</select>
+            <button type="submit">Criar usuário</button>
+          </form>
+        </div>
+
+        {"".join(blocos)}
+
+        <details class="cat-breakdown" style="padding:0">
+          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:13px;color:var(--ink-soft)">
+            O que cada permissão libera
+          </summary>
+          <div style="padding:0 18px 16px 18px">{legenda}</div>
+        </details>
+      </div>
+
+      <script>
+        const PERFIS = {json.dumps({k: v[1] for k, v in PERFIS.items()})};
+        function aplicarPerfil(sel) {{
+          const perms = PERFIS[sel.value] || [];
+          const grade = document.querySelector('.perm-grid[data-usuario="' + sel.dataset.usuario + '"]');
+          if (!grade) return;
+          grade.querySelectorAll('input[type=checkbox]').forEach(cb => {{
+            cb.checked = perms.includes(cb.value);
+          }});
+        }}
+      </script>
     </body></html>
     """
 
