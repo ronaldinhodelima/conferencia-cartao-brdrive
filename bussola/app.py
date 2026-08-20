@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import requests
 import psycopg2
 import psycopg2.extras
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -19,6 +19,11 @@ PLUGGY_CLIENT_ID = os.environ.get("PLUGGY_CLIENT_ID")
 PLUGGY_CLIENT_SECRET = os.environ.get("PLUGGY_CLIENT_SECRET")
 PLUGGY_ITEM_ID = os.environ.get("PLUGGY_ITEM_ID")
 SYNC_INTERVAL_SECONDS = int(os.environ.get("SYNC_INTERVAL_SECONDS", str(24 * 60 * 60)))
+# Enquanto essa env nao for configurada no Coolify, /sync fica aberto (comportamento
+# atual). Depois de configurada (aqui e no app principal, com o MESMO valor), o
+# endpoint passa a exigir o header X-Sync-Secret - evita que qualquer um que descubra
+# a URL interna do worker fique disparando sync a vontade.
+SYNC_SECRET = os.environ.get("SYNC_SECRET")
 
 SCHEMA_SQL = """
 CREATE SCHEMA IF NOT EXISTS cartao;
@@ -531,6 +536,8 @@ def root():
 
 @app.route("/sync", methods=["GET", "POST"])
 def sync_now():
+    if SYNC_SECRET and request.headers.get("X-Sync-Secret") != SYNC_SECRET:
+        return jsonify({"ok": False, "erro": "nao autorizado"}), 401
     result = run_sync()
     return jsonify(result)
 

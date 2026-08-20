@@ -730,7 +730,8 @@ def get_ultima_sincronizacao():
 def disparar_sincronizacao():
     """Chama o endpoint /sync do bussola-financeira-app para forcar uma atualizacao imediata."""
     try:
-        req = urllib.request.Request(BUSSOLA_SYNC_URL, method="POST")
+        headers = {"X-Sync-Secret": os.environ["SYNC_SECRET"]} if os.environ.get("SYNC_SECRET") else {}
+        req = urllib.request.Request(BUSSOLA_SYNC_URL, method="POST", headers=headers)
         with urllib.request.urlopen(req, timeout=60) as resp:
             resp.read()
         return True, None
