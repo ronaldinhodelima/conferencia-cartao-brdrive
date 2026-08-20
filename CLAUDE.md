@@ -42,7 +42,7 @@ Na prática:
 
 ## Repositório e deploy
 
-- **GitHub**: `ronaldinhodelima/conferencia-cartao-brdrive` (branch `main`).
+- **GitHub**: `ronaldinhodelima/pe-de-meia` (branch `main`).
   - `app.py` → app principal (Flask).
   - `bussola/app.py` → worker de sincronização Pluggy.
   - `Dockerfile` → build do app principal.
@@ -60,7 +60,7 @@ Na prática:
   se mostrou pouco confiável nesta sessão — os cliques às vezes não disparavam o build).
   Fluxo usado:
   ```bash
-  git clone https://github.com/ronaldinhodelima/conferencia-cartao-brdrive.git
+  git clone https://github.com/ronaldinhodelima/pe-de-meia.git
   cp app.py <repo>/app.py   # depois de editar
   cd <repo> && git add app.py && git commit -m "..." && git push
   curl -X POST -H "Authorization: Bearer <COOLIFY_TOKEN>" \
@@ -165,8 +165,8 @@ BRDrive disponíveis no ambiente (vendas, propostas comerciais, etc.) são de ou
 1. Instalar: `npm install -g @anthropic-ai/claude-code` (requer Node.js).
 2. Clonar o repositório localmente:
    ```bash
-   git clone https://github.com/ronaldinhodelima/conferencia-cartao-brdrive.git
-   cd conferencia-cartao-brdrive
+   git clone https://github.com/ronaldinhodelima/pe-de-meia.git
+   cd pe-de-meia
    ```
 3. Este arquivo (`CLAUDE.md`) deve ficar na raiz do repositório — o Claude Code lê
    automaticamente ao iniciar uma sessão nessa pasta.
