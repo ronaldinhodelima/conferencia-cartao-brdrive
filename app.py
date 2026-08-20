@@ -764,201 +764,213 @@ def migrate():
     try:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
-        # marca lancamentos que entraram por importacao de arquivo (nao vieram do Pluggy),
-        # para permitir exclui-los sem risco de "ressuscitarem" numa sincronizacao
-        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS importado boolean DEFAULT false;")
-        # natureza definida no proprio lancamento, quando ele foge do padrao da categoria
-        # (ex: um PIX de R$ 98 mil que foi a compra de um terreno, e nao consumo)
-        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS natureza text;")
-        # renomeia a dimensao antiga (nao roda de novo depois de renomeada)
-        cur.execute("UPDATE cartao.dimensao SET nome = 'Projeto' WHERE nome = 'Projeto / Evento';")
-
-        # usuarios e permissoes. A senha fica em hash - nunca em texto puro.
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.usuario ("
-            "usuario text PRIMARY KEY, "
-            "nome text, "
-            "senha_hash text NOT NULL, "
-            "perfil text NOT NULL DEFAULT 'leitura', "
-            "permissoes text[] NOT NULL DEFAULT '{}', "
-            "ativo boolean NOT NULL DEFAULT true, "
-            "criado_em timestamptz DEFAULT now(), "
-            "ultimo_acesso timestamptz);"
-        )
+        cur.execute("CREATE TABLE IF NOT EXISTS cartao.schema_version (versao integer PRIMARY KEY);")
         conn.commit()
+        cur.execute("SELECT COALESCE(MAX(versao), 0) FROM cartao.schema_version;")
+        versao_atual = cur.fetchone()[0]
 
-        # primeiro boot: cria os acessos que hoje vivem nas variaveis de ambiente,
-        # ja como administradores, para ninguem ficar de fora do sistema
-        cur.execute("SELECT COUNT(*) FROM cartao.usuario;")
-        if cur.fetchone()[0] == 0:
-            for login, senha in USERS.items():
-                if not login:
-                    continue
-                cur.execute(
-                    "INSERT INTO cartao.usuario (usuario, nome, senha_hash, perfil, permissoes) "
-                    "VALUES (%s,%s,%s,'admin',%s) ON CONFLICT (usuario) DO NOTHING;",
-                    (login, login.capitalize(), hash_senha(senha), permissoes_do_perfil("admin")),
-                )
-            conn.commit()
-        cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
-            "id serial PRIMARY KEY, padrao text NOT NULL, categoria text NOT NULL, ordem integer DEFAULT 0);"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.regra_dimensao_valor ("
-            "regra_id integer NOT NULL REFERENCES cartao.regra_classificacao(id) ON DELETE CASCADE, "
-            "dimensao_id integer NOT NULL, valor_id integer NOT NULL, "
-            "PRIMARY KEY (regra_id, dimensao_id));"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.cartao_nome ("
-            "final4 varchar(4) PRIMARY KEY, prefixo varchar(100) NOT NULL);"
-        )
-        cur.execute(
-            "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES "
-            "('9938', 'Andrea - digital'), "
-            "('3200', 'Andrea - físico'), "
-            "('6493', 'Ronaldo - físico'), "
-            "('7638', 'Ronaldo - digital') "
-            "ON CONFLICT (final4) DO NOTHING;"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.grupo_custo ("
-            "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
-            "teto_mensal numeric, teto_anual numeric);"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.subgrupo_custo ("
-            "id serial PRIMARY KEY, "
-            "grupo_id integer NOT NULL REFERENCES cartao.grupo_custo(id) ON DELETE CASCADE, "
-            "nome text NOT NULL, teto_mensal numeric, teto_anual numeric, "
-            "UNIQUE(grupo_id, nome));"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.categoria_subgrupo ("
-            "categoria text PRIMARY KEY, "
-            "subgrupo_id integer REFERENCES cartao.subgrupo_custo(id) ON DELETE SET NULL);"
-        )
-        # natureza de cada categoria (base do DRE). ON CONFLICT DO NOTHING para
-        # nunca sobrescrever uma classificacao que o usuario tenha ajustado.
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.categoria_natureza ("
-            "categoria text PRIMARY KEY, natureza text NOT NULL DEFAULT 'despesa');"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.categoria ("
-            "categoria text PRIMARY KEY, nome_pt text NOT NULL, criado_em timestamptz DEFAULT now());"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.categoria_oculta (categoria text PRIMARY KEY);"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.item_titular ("
-            "item_id uuid PRIMARY KEY REFERENCES cartao.pluggy_item(item_id) ON DELETE CASCADE, "
-            "titular text NOT NULL);"
-        )
-        for categoria, natureza in SEED_NATUREZAS.items():
+        # tudo abaixo ja rodou em producao (schema atual = versao 1). So roda de novo
+        # se for um banco novo (versao 0) - evita bater no Postgres com ~30 comandos
+        # DDL redundantes a cada boot. Migracoes futuras: adicionar um novo bloco
+        # "if versao_atual < N" abaixo deste, terminando em "INSERT ... VALUES (N)".
+        if versao_atual < 1:
+            cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS duplicada boolean DEFAULT false;")
+            # marca lancamentos que entraram por importacao de arquivo (nao vieram do Pluggy),
+            # para permitir exclui-los sem risco de "ressuscitarem" numa sincronizacao
+            cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS importado boolean DEFAULT false;")
+            # natureza definida no proprio lancamento, quando ele foge do padrao da categoria
+            # (ex: um PIX de R$ 98 mil que foi a compra de um terreno, e nao consumo)
+            cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS natureza text;")
+            # renomeia a dimensao antiga (nao roda de novo depois de renomeada)
+            cur.execute("UPDATE cartao.dimensao SET nome = 'Projeto' WHERE nome = 'Projeto / Evento';")
+
+            # usuarios e permissoes. A senha fica em hash - nunca em texto puro.
             cur.execute(
-                "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
-                "ON CONFLICT (categoria) DO NOTHING;",
-                (categoria, natureza),
+                "CREATE TABLE IF NOT EXISTS cartao.usuario ("
+                "usuario text PRIMARY KEY, "
+                "nome text, "
+                "senha_hash text NOT NULL, "
+                "perfil text NOT NULL DEFAULT 'leitura', "
+                "permissoes text[] NOT NULL DEFAULT '{}', "
+                "ativo boolean NOT NULL DEFAULT true, "
+                "criado_em timestamptz DEFAULT now(), "
+                "ultimo_acesso timestamptz);"
             )
-        conn.commit()
+            conn.commit()
 
-        # seed inicial de grupos/subgrupos (so roda se a tabela grupo_custo estiver vazia)
-        cur.execute("SELECT COUNT(*) FROM cartao.grupo_custo;")
-        if cur.fetchone()[0] == 0:
-            for grupo_nome, g_teto_mensal, g_teto_anual, subgrupos in SEED_GRUPOS:
-                cur.execute(
-                    "INSERT INTO cartao.grupo_custo (nome, teto_mensal, teto_anual) VALUES (%s,%s,%s) RETURNING id;",
-                    (grupo_nome, g_teto_mensal, g_teto_anual),
-                )
-                grupo_id = cur.fetchone()[0]
-                for sub_nome, s_teto_mensal, s_teto_anual, categorias in subgrupos:
+            # primeiro boot: cria os acessos que hoje vivem nas variaveis de ambiente,
+            # ja como administradores, para ninguem ficar de fora do sistema
+            cur.execute("SELECT COUNT(*) FROM cartao.usuario;")
+            if cur.fetchone()[0] == 0:
+                for login, senha in USERS.items():
+                    if not login:
+                        continue
                     cur.execute(
-                        "INSERT INTO cartao.subgrupo_custo (grupo_id, nome, teto_mensal, teto_anual) "
-                        "VALUES (%s,%s,%s,%s) RETURNING id;",
-                        (grupo_id, sub_nome, s_teto_mensal, s_teto_anual),
+                        "INSERT INTO cartao.usuario (usuario, nome, senha_hash, perfil, permissoes) "
+                        "VALUES (%s,%s,%s,'admin',%s) ON CONFLICT (usuario) DO NOTHING;",
+                        (login, login.capitalize(), hash_senha(senha), permissoes_do_perfil("admin")),
                     )
-                    subgrupo_id = cur.fetchone()[0]
-                    for categoria in categorias:
-                        cur.execute(
-                            "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
-                            "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
-                            (categoria, subgrupo_id),
-                        )
-            conn.commit()
-
-        # juros e tarifas passaram a contar como despesa real: garante o grupo
-        # "Despesas Financeiras" tambem nas bases que ja tinham sido semeadas
-        cur.execute("SELECT id FROM cartao.grupo_custo WHERE nome = 'Despesas Financeiras';")
-        row = cur.fetchone()
-        if not row:
+                conn.commit()
+            cur.execute("ALTER TABLE cartao.transacao ADD COLUMN IF NOT EXISTS regra_aplicada_id integer;")
             cur.execute(
-                "INSERT INTO cartao.grupo_custo (nome) VALUES ('Despesas Financeiras') RETURNING id;"
+                "CREATE TABLE IF NOT EXISTS cartao.regra_classificacao ("
+                "id serial PRIMARY KEY, padrao text NOT NULL, categoria text NOT NULL, ordem integer DEFAULT 0);"
             )
-            grupo_fin_id = cur.fetchone()[0]
             cur.execute(
-                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s, 'Juros & Tarifas') RETURNING id;",
-                (grupo_fin_id,),
+                "CREATE TABLE IF NOT EXISTS cartao.regra_dimensao_valor ("
+                "regra_id integer NOT NULL REFERENCES cartao.regra_classificacao(id) ON DELETE CASCADE, "
+                "dimensao_id integer NOT NULL, valor_id integer NOT NULL, "
+                "PRIMARY KEY (regra_id, dimensao_id));"
             )
-            sub_fin_id = cur.fetchone()[0]
-            for categoria in ("Interests charged", "Credit card fees", "Tax on financial operations"):
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.cartao_nome ("
+                "final4 varchar(4) PRIMARY KEY, prefixo varchar(100) NOT NULL);"
+            )
+            cur.execute(
+                "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES "
+                "('9938', 'Andrea - digital'), "
+                "('3200', 'Andrea - físico'), "
+                "('6493', 'Ronaldo - físico'), "
+                "('7638', 'Ronaldo - digital') "
+                "ON CONFLICT (final4) DO NOTHING;"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.grupo_custo ("
+                "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
+                "teto_mensal numeric, teto_anual numeric);"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.subgrupo_custo ("
+                "id serial PRIMARY KEY, "
+                "grupo_id integer NOT NULL REFERENCES cartao.grupo_custo(id) ON DELETE CASCADE, "
+                "nome text NOT NULL, teto_mensal numeric, teto_anual numeric, "
+                "UNIQUE(grupo_id, nome));"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.categoria_subgrupo ("
+                "categoria text PRIMARY KEY, "
+                "subgrupo_id integer REFERENCES cartao.subgrupo_custo(id) ON DELETE SET NULL);"
+            )
+            # natureza de cada categoria (base do DRE). ON CONFLICT DO NOTHING para
+            # nunca sobrescrever uma classificacao que o usuario tenha ajustado.
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.categoria_natureza ("
+                "categoria text PRIMARY KEY, natureza text NOT NULL DEFAULT 'despesa');"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.categoria ("
+                "categoria text PRIMARY KEY, nome_pt text NOT NULL, criado_em timestamptz DEFAULT now());"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.categoria_oculta (categoria text PRIMARY KEY);"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.item_titular ("
+                "item_id uuid PRIMARY KEY REFERENCES cartao.pluggy_item(item_id) ON DELETE CASCADE, "
+                "titular text NOT NULL);"
+            )
+            for categoria, natureza in SEED_NATUREZAS.items():
                 cur.execute(
-                    "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
-                    "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
-                    (categoria, sub_fin_id),
+                    "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                    "ON CONFLICT (categoria) DO NOTHING;",
+                    (categoria, natureza),
                 )
             conn.commit()
 
-        # dimensoes adicionais (ex: Responsavel, Projeto/Evento) - independentes do Centro de Custo
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.dimensao ("
-            "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
-            "obrigatoria boolean DEFAULT true, ordem integer DEFAULT 0);"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.dimensao_valor ("
-            "id serial PRIMARY KEY, "
-            "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
-            "nome text NOT NULL, UNIQUE(dimensao_id, nome));"
-        )
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS cartao.transacao_dimensao ("
-            "transacao_id text NOT NULL, "
-            "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
-            "valor_id integer REFERENCES cartao.dimensao_valor(id) ON DELETE SET NULL, "
-            "PRIMARY KEY (transacao_id, dimensao_id));"
-        )
-        conn.commit()
+            # seed inicial de grupos/subgrupos (so roda se a tabela grupo_custo estiver vazia)
+            cur.execute("SELECT COUNT(*) FROM cartao.grupo_custo;")
+            if cur.fetchone()[0] == 0:
+                for grupo_nome, g_teto_mensal, g_teto_anual, subgrupos in SEED_GRUPOS:
+                    cur.execute(
+                        "INSERT INTO cartao.grupo_custo (nome, teto_mensal, teto_anual) VALUES (%s,%s,%s) RETURNING id;",
+                        (grupo_nome, g_teto_mensal, g_teto_anual),
+                    )
+                    grupo_id = cur.fetchone()[0]
+                    for sub_nome, s_teto_mensal, s_teto_anual, categorias in subgrupos:
+                        cur.execute(
+                            "INSERT INTO cartao.subgrupo_custo (grupo_id, nome, teto_mensal, teto_anual) "
+                            "VALUES (%s,%s,%s,%s) RETURNING id;",
+                            (grupo_id, sub_nome, s_teto_mensal, s_teto_anual),
+                        )
+                        subgrupo_id = cur.fetchone()[0]
+                        for categoria in categorias:
+                            cur.execute(
+                                "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                                "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                                (categoria, subgrupo_id),
+                            )
+                conn.commit()
 
-        # conta sintetica para lancamentos manuais (dinheiro em especie), fora do Pluggy
-        cur.execute(
-            "INSERT INTO cartao.pluggy_item (item_id, connector_name, status) VALUES "
-            "('00000000-0000-0000-0000-000000000001', 'Manual', 'OK') "
-            "ON CONFLICT (item_id) DO NOTHING;"
-        )
-        cur.execute(
-            "INSERT INTO cartao.conta (account_id, item_id, nome, tipo, numero_final) VALUES "
-            "('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', "
-            "'Dinheiro', 'MANUAL', NULL) "
-            "ON CONFLICT (account_id) DO NOTHING;"
-        )
-        conn.commit()
+            # juros e tarifas passaram a contar como despesa real: garante o grupo
+            # "Despesas Financeiras" tambem nas bases que ja tinham sido semeadas
+            cur.execute("SELECT id FROM cartao.grupo_custo WHERE nome = 'Despesas Financeiras';")
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO cartao.grupo_custo (nome) VALUES ('Despesas Financeiras') RETURNING id;"
+                )
+                grupo_fin_id = cur.fetchone()[0]
+                cur.execute(
+                    "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s, 'Juros & Tarifas') RETURNING id;",
+                    (grupo_fin_id,),
+                )
+                sub_fin_id = cur.fetchone()[0]
+                for categoria in ("Interests charged", "Credit card fees", "Tax on financial operations"):
+                    cur.execute(
+                        "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                        "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                        (categoria, sub_fin_id),
+                    )
+                conn.commit()
 
-        cur.execute("SELECT COUNT(*) FROM cartao.dimensao;")
-        if cur.fetchone()[0] == 0:
-            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Responsável', true, 1) RETURNING id;")
-            resp_id = cur.fetchone()[0]
-            for nome in ("Ronaldo", "Andrea", "Amanda", "Compartilhado"):
-                cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (resp_id, nome))
+            # dimensoes adicionais (ex: Responsavel, Projeto/Evento) - independentes do Centro de Custo
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.dimensao ("
+                "id serial PRIMARY KEY, nome text UNIQUE NOT NULL, "
+                "obrigatoria boolean DEFAULT true, ordem integer DEFAULT 0);"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.dimensao_valor ("
+                "id serial PRIMARY KEY, "
+                "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
+                "nome text NOT NULL, UNIQUE(dimensao_id, nome));"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS cartao.transacao_dimensao ("
+                "transacao_id text NOT NULL, "
+                "dimensao_id integer NOT NULL REFERENCES cartao.dimensao(id) ON DELETE CASCADE, "
+                "valor_id integer REFERENCES cartao.dimensao_valor(id) ON DELETE SET NULL, "
+                "PRIMARY KEY (transacao_id, dimensao_id));"
+            )
+            conn.commit()
 
-            cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Projeto', false, 2) RETURNING id;")
-            proj_id = cur.fetchone()[0]
-            for nome in ("Geral", "Viagem Chile 2027"):
-                cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (proj_id, nome))
+            # conta sintetica para lancamentos manuais (dinheiro em especie), fora do Pluggy
+            cur.execute(
+                "INSERT INTO cartao.pluggy_item (item_id, connector_name, status) VALUES "
+                "('00000000-0000-0000-0000-000000000001', 'Manual', 'OK') "
+                "ON CONFLICT (item_id) DO NOTHING;"
+            )
+            cur.execute(
+                "INSERT INTO cartao.conta (account_id, item_id, nome, tipo, numero_final) VALUES "
+                "('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', "
+                "'Dinheiro', 'MANUAL', NULL) "
+                "ON CONFLICT (account_id) DO NOTHING;"
+            )
+            conn.commit()
+
+            cur.execute("SELECT COUNT(*) FROM cartao.dimensao;")
+            if cur.fetchone()[0] == 0:
+                cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Responsável', true, 1) RETURNING id;")
+                resp_id = cur.fetchone()[0]
+                for nome in ("Ronaldo", "Andrea", "Amanda", "Compartilhado"):
+                    cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (resp_id, nome))
+
+                cur.execute("INSERT INTO cartao.dimensao (nome, obrigatoria, ordem) VALUES ('Projeto', false, 2) RETURNING id;")
+                proj_id = cur.fetchone()[0]
+                for nome in ("Geral", "Viagem Chile 2027"):
+                    cur.execute("INSERT INTO cartao.dimensao_valor (dimensao_id, nome) VALUES (%s,%s);", (proj_id, nome))
+                conn.commit()
+            cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (1);")
             conn.commit()
 
         cur.close()
