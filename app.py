@@ -6,6 +6,7 @@ import io
 import json
 import re
 import secrets
+import unicodedata
 import uuid
 import urllib.request
 import urllib.error
@@ -650,6 +651,14 @@ def cat_pt(categoria):
     if not categoria:
         return "-"
     return CATEGORIA_PT.get(categoria, categoria)
+
+
+def chave_alfa(texto):
+    """Chave de ordenacao alfabetica que ignora acentos, maiusculas/minusculas
+    e espacos nas bordas - para que 'Água' venha antes de 'Banco', por exemplo."""
+    texto = (texto or "").strip().casefold()
+    sem_acento = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
 
 def get_ultima_sincronizacao():
@@ -1307,10 +1316,9 @@ def topbar_html(titulo, ativo=None):
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
               {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
               {f'<a href="/cartoes" class="{cls("cartoes")}">Gerenciar cartões</a>' if pode("cadastros") else ""}
-              {f'<a href="/importar" class="{cls("importar")}">Importar extrato / fatura</a>' if pode("importar") else ""}
               {f'<a href="/usuarios" class="{cls("usuarios")}">Usuários e permissões</a>' if pode("usuarios") else ""}
             </div>
-          </div>''' if (pode("cadastros") or pode("importar") or pode("usuarios")) else ""}
+          </div>''' if (pode("cadastros") or pode("usuarios")) else ""}
           {'''<div class="sync-widget">
             <span class="sync-dot" id="syncDot"></span>
             <span id="syncTexto">Verificando...</span>
@@ -1534,7 +1542,7 @@ def index():
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
-    categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
+    categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: chave_alfa(cat_pt(c)))
 
     where = ["to_char(t.data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
@@ -2574,7 +2582,7 @@ def regras_view():
 
     todas_categorias = sorted(
         (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
-        key=lambda c: cat_pt(c).lower(),
+        key=lambda c: chave_alfa(cat_pt(c)),
     )
 
     cur.close()
@@ -2808,11 +2816,11 @@ def dre():
 
     blocos = []
     total_geral_anual = 0.0
-    for g in sorted(grupos.values(), key=lambda x: x["nome"]):
+    for g in sorted(grupos.values(), key=lambda x: chave_alfa(x["nome"])):
         g_anual = 0.0
         g_mensal = 0.0
         subs_html = []
-        for s in sorted(g["subgrupos"].values(), key=lambda x: x["nome"]):
+        for s in sorted(g["subgrupos"].values(), key=lambda x: chave_alfa(x["nome"])):
             s_anual = sum(anual_por_cat.get(c, 0.0) for c in s["categorias"])
             s_mensal = sum(mensal_por_cat.get(c, 0.0) for c in s["categorias"])
             g_anual += s_anual
@@ -3006,10 +3014,10 @@ def grupos_view():
             )
         conn.commit()
 
-    cur.execute("SELECT id, nome, teto_mensal, teto_anual FROM cartao.grupo_custo ORDER BY nome;")
-    grupos_db = cur.fetchall()
-    cur.execute("SELECT id, grupo_id, nome, teto_mensal, teto_anual FROM cartao.subgrupo_custo ORDER BY nome;")
-    subgrupos_db = cur.fetchall()
+    cur.execute("SELECT id, nome, teto_mensal, teto_anual FROM cartao.grupo_custo;")
+    grupos_db = sorted(cur.fetchall(), key=lambda g: chave_alfa(g["nome"]))
+    cur.execute("SELECT id, grupo_id, nome, teto_mensal, teto_anual FROM cartao.subgrupo_custo;")
+    subgrupos_db = sorted(cur.fetchall(), key=lambda s: chave_alfa(s["nome"]))
     cur.execute("SELECT categoria, subgrupo_id FROM cartao.categoria_subgrupo;")
     mapa_categoria = {r["categoria"]: r["subgrupo_id"] for r in cur.fetchall()}
     cur.close()
@@ -3042,7 +3050,7 @@ def grupos_view():
             for s in subs
         )
         grupos_html.append(f"""
-        <details class="cat-breakdown" style="padding:0">
+        <details class="cat-breakdown lembrar-aberto" id="grupo-{g["id"]}" style="padding:0">
           <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
             {g["nome"]} <span style="color:#888;font-weight:400;font-size:12px">({len(subs)} subgrupo{'s' if len(subs)!=1 else ''})</span>
           </summary>
@@ -3084,7 +3092,7 @@ def grupos_view():
 
     todas_categorias = sorted(
         (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
-        key=lambda c: cat_pt(c).lower(),
+        key=lambda c: chave_alfa(cat_pt(c)),
     )
     categorias_rows = "".join(
         f'<tr><td>{cat_pt(c)}</td><td>'
@@ -3117,7 +3125,7 @@ def grupos_view():
 
         {"".join(grupos_html)}
 
-        <details class="cat-breakdown" style="padding:0">
+        <details class="cat-breakdown lembrar-aberto" id="grupo-vincular" style="padding:0">
           <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">Vincular categorias aos subgrupos</summary>
           <div style="padding:0 18px 18px 18px">
             <table>
@@ -3127,6 +3135,24 @@ def grupos_view():
           </div>
         </details>
       </div>
+      <script>
+        (function () {{
+          var CHAVE = "pedemeia_aberto_grupos";
+          var abertos;
+          try {{ abertos = JSON.parse(localStorage.getItem(CHAVE) || "[]"); }} catch (e) {{ abertos = []; }}
+          document.querySelectorAll("details.lembrar-aberto").forEach(function (det) {{
+            if (abertos.indexOf(det.id) !== -1) det.open = true;
+            det.addEventListener("toggle", function () {{
+              var atual;
+              try {{ atual = JSON.parse(localStorage.getItem(CHAVE) || "[]"); }} catch (e) {{ atual = []; }}
+              var idx = atual.indexOf(det.id);
+              if (det.open && idx === -1) atual.push(det.id);
+              if (!det.open && idx !== -1) atual.splice(idx, 1);
+              localStorage.setItem(CHAVE, JSON.stringify(atual));
+            }});
+          }});
+        }})();
+      </script>
     </body></html>
     """
 
@@ -3250,7 +3276,7 @@ def relatorios():
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
-    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: cat_pt(c).lower())
+    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: chave_alfa(cat_pt(c)))
 
     cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
     finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
@@ -4200,7 +4226,7 @@ def naturezas_view():
     cur.close()
     conn.close()
 
-    categorias = sorted(set(usadas) | set(CATEGORIAS_EXTRA) | set(atual), key=lambda c: cat_pt(c).lower())
+    categorias = sorted(set(usadas) | set(CATEGORIAS_EXTRA) | set(atual), key=lambda c: chave_alfa(cat_pt(c)))
 
     def linha(c):
         nat = atual.get(c, NATUREZA_PADRAO)
