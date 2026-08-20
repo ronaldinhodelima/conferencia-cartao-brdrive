@@ -24,6 +24,13 @@ BUSSOLA_SYNC_URL = os.environ.get(
     "BUSSOLA_SYNC_URL", "https://hdgffcvh3ljqe61dczztaycz.coolify.brdrive.net/sync"
 )
 app.secret_key = os.environ.get("SECRET_KEY", "troque-isto-em-producao")
+# cookie de sessao so trafega por HTTPS (o Traefik do Coolify ja forca https) e
+# nunca e enviado em navegacao cross-site - reduz roubo de sessao via rede ou CSRF.
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 # usuarios iniciais (env). Servem apenas para criar os primeiros acessos:
 # depois do primeiro boot os usuarios passam a viver na tabela cartao.usuario,
