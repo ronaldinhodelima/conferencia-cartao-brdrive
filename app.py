@@ -232,6 +232,45 @@ def detectar_banco(nome_conta, connector_name):
     return connector_name or nome_conta or "Banco"
 
 
+# selo visual de cada banco: cor da marca + sigla. Feito em CSS (sem imagem
+# externa) para carregar instantaneo e nao depender de arquivo de terceiros.
+BANCOS_ESTILO = {
+    "Nubank": ("#820ad1", "Nu"),
+    "Unicred": ("#00995d", "UN"),
+    "Itaú": ("#ec7000", "It"),
+    "Bradesco": ("#cc092f", "Br"),
+    "Santander": ("#ec0000", "Sa"),
+    "Caixa": ("#0070af", "CX"),
+    "Banco do Brasil": ("#f9dd16", "BB", "#1c1c1c"),
+    "Inter": ("#ff7a00", "In"),
+    "C6 Bank": ("#242424", "C6"),
+    "PicPay": ("#11c76f", "PP"),
+    "Mercado Pago": ("#00b1ea", "MP"),
+    "BTG": ("#0d1b2a", "BT"),
+    "XP": ("#0f0f0f", "XP"),
+    "Sicoob": ("#00a94f", "Sc"),
+    "Sicredi": ("#3fa110", "Si"),
+    "Neon": ("#00c8f0", "Ne"),
+    "Will Bank": ("#ffe600", "Wl", "#1c1c1c"),
+    "Original": ("#00a868", "Or"),
+    "Safra": ("#00294b", "Sf"),
+    "Pan": ("#00a0df", "Pa"),
+}
+
+
+def selo_banco_html(banco, tipo=None):
+    """Selo colorido do banco. Para a conta manual usa um selo neutro."""
+    if tipo == "MANUAL":
+        return '<span class="selo" style="background:#5c6672">R$</span>'
+    estilo = BANCOS_ESTILO.get(banco)
+    if estilo:
+        cor, sigla = estilo[0], estilo[1]
+        cor_texto = estilo[2] if len(estilo) > 2 else "#ffffff"
+    else:
+        cor, sigla, cor_texto = "#7b828c", (banco or "?")[:2].upper(), "#ffffff"
+    return f'<span class="selo" style="background:{cor};color:{cor_texto}">{sigla}</span>'
+
+
 def origem_label(tipo, connector_name, nome_conta):
     """Rotulo amigavel (completo) de origem a partir do tipo da conta + nome do banco detectado."""
     banco = detectar_banco(nome_conta, connector_name)
@@ -245,12 +284,12 @@ def origem_label(tipo, connector_name, nome_conta):
 
 
 def origem_label_curto(tipo, connector_name, nome_conta):
-    """Versao abreviada do rotulo de origem (ex: 'CC Unicred'), usada na UI com tooltip."""
+    """Rotulo curto de origem, usado na UI ao lado do selo do banco."""
     banco = detectar_banco(nome_conta, connector_name)
     if tipo == "CREDIT":
         return f"Cartão {banco}"
     if tipo == "BANK":
-        return f"CC {banco}"
+        return f"Conta Corrente {banco}"
     if tipo == "MANUAL":
         return "Dinheiro"
     return nome_conta or "Outra"
@@ -282,9 +321,13 @@ def carregar_origens(cur):
         banco = banco_por_item.get(c["item_id"], c["connector_name"])
         completo = origem_label(c["tipo"], banco, c["nome"])
         curto = origem_label_curto(c["tipo"], banco, c["nome"])
+        selo = selo_banco_html(detectar_banco(c["nome"], banco), c["tipo"])
         aid = str(c["account_id"])
-        contas_by_id[aid] = {**c, "banco": banco, "label": completo, "label_curto": curto}
-        opcoes.append((aid, curto, completo))
+        contas_by_id[aid] = {
+            **c, "banco": banco, "label": completo, "label_curto": curto, "selo": selo,
+        }
+        # (valor, html com selo, titulo do tooltip, texto sem html)
+        opcoes.append((aid, f"{selo}{curto}", completo, curto))
     return contas_by_id, opcoes
 
 
@@ -465,9 +508,11 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
     for opt in opcoes:
         val, texto = opt[0], opt[1]
         titulo = opt[2] if len(opt) > 2 else texto
+        curto = opt[3] if len(opt) > 3 else None
         marcado = "checked" if str(val) in selecionados else ""
+        attr_curto = f' data-curto="{curto}"' if curto else ""
         partes.append(
-            f'<label class="chip-opt" title="{titulo}">'
+            f'<label class="chip-opt" data-tip="{titulo}"{attr_curto}>'
             f'<input type="checkbox" name="{nome}" value="{val}" {marcado} '
             f'onchange="{onchange}"> {texto}</label>'
         )
@@ -929,6 +974,26 @@ BASE_CSS = """
   .btn-perigo { background: var(--bad); color: #fff; border: none; padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500; }
   .btn-perigo:hover { opacity: .88; }
 
+  /* ---------- selo do banco ---------- */
+  .selo {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 23px; height: 16px; padding: 0 5px; border-radius: 4px;
+    font-size: 9.5px; font-weight: 700; letter-spacing: .02em;
+    margin-right: 6px; vertical-align: middle; flex: none;
+  }
+  .cel-origem { display: flex; align-items: center; }
+  .cel-origem > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- tooltip proprio (o nativo do navegador demora ~1s) ---------- */
+  #tooltip {
+    position: fixed; z-index: 9999; pointer-events: none;
+    background: #1f2126; color: #fff; padding: 6px 9px; border-radius: 6px;
+    font-size: 12px; line-height: 1.4; max-width: 360px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    opacity: 0; transition: opacity .1s; white-space: normal;
+  }
+  #tooltip.show { opacity: 1; }
+
   /* ---------- login ---------- */
   .login-box { max-width: 340px; margin: 100px auto; background: var(--surface); padding: 32px; border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow-2); }
   .login-box h2 { font-size: 19px; letter-spacing: -0.01em; margin: 0 0 18px 0; }
@@ -1097,6 +1162,53 @@ def topbar_html(titulo, ativo=None):
         </div>
       </div>
       <script>
+        // ---- tooltip proprio: o balao nativo do navegador so aparece depois de ~1s ----
+        (function() {{
+          let el = null, timer = null;
+          function criar() {{
+            if (!el) {{
+              el = document.createElement('div');
+              el.id = 'tooltip';
+              document.body.appendChild(el);
+            }}
+            return el;
+          }}
+          function posicionar(e, t) {{
+            const m = 14;
+            let x = e.clientX + m, y = e.clientY + m;
+            const r = t.getBoundingClientRect();
+            if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - m;
+            if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - m;
+            t.style.left = Math.max(6, x) + 'px';
+            t.style.top = Math.max(6, y) + 'px';
+          }}
+          document.addEventListener('mouseover', function(e) {{
+            const alvo = e.target.closest('[data-tip]');
+            if (!alvo) return;
+            const texto = alvo.getAttribute('data-tip');
+            if (!texto) return;
+            clearTimeout(timer);
+            timer = setTimeout(function() {{
+              const t = criar();
+              t.textContent = texto;
+              t.classList.add('show');
+              posicionar(e, t);
+            }}, 120);
+          }});
+          document.addEventListener('mousemove', function(e) {{
+            if (el && el.classList.contains('show')) posicionar(e, el);
+          }});
+          document.addEventListener('mouseout', function(e) {{
+            if (!e.target.closest('[data-tip]')) return;
+            clearTimeout(timer);
+            if (el) el.classList.remove('show');
+          }});
+          document.addEventListener('click', function() {{
+            clearTimeout(timer);
+            if (el) el.classList.remove('show');
+          }});
+        }})();
+
         // menu do topo: abre/fecha no clique e fecha ao clicar fora ou apertar Esc
         function menuToggle(e, btn) {{
           e.stopPropagation();
@@ -1316,14 +1428,16 @@ def index():
         return prefixo if prefixo else f"final {final4}"
 
     def origem_curta(account_id, final4=None):
+        """Selo do banco + texto curto. No cartao, o apelido cadastrado
+        (ex: 'Andrea físico') diz mais que 'Cartão Unicred'."""
         c = contas_by_id.get(str(account_id))
         if not c:
             return "-"
-        # no cartao de credito o apelido do cartao (ex: "Andrea físico") diz mais
-        # que "Cartão Unicred", entao usamos ele quando existir
         if c["tipo"] == "CREDIT" and final4 and nomes_cartao.get(final4):
-            return nomes_cartao[final4]
-        return c["label_curto"]
+            texto = nomes_cartao[final4]
+        else:
+            texto = c["label_curto"]
+        return f'{c["selo"]}<span>{texto}</span>'
 
     def origem_completa(account_id, final4=None):
         c = contas_by_id.get(str(account_id))
@@ -1391,9 +1505,9 @@ def index():
 
         trs.append(
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
-            f'<td class="cel-data" title="{data_fmt_full}">{data_fmt}</td>'
-            f'<td class="cel-desc" title="{desc}">{desc}</td>'
-            f'<td class="cel-origem" title="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
+            f'<td class="cel-data" data-tip="{data_fmt_full}">{data_fmt}</td>'
+            f'<td class="cel-desc" data-tip="{desc}">{desc}</td>'
+            f'<td class="cel-origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
             f'<td class="cel-dim"><select class="cat-select" onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
             f'<td class="valor cel-valor" style="{cor_valor}">{valor_fmt}</td>'
@@ -1612,8 +1726,8 @@ def index():
           const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
           cont.innerHTML = marcados.map(cb => {{
             const lbl = cb.closest('.chip-opt');
-            const curto = lbl.textContent.trim();
-            const completo = lbl.getAttribute('title') || curto;
+            const curto = lbl.dataset.curto || lbl.textContent.trim();
+            const completo = lbl.getAttribute('data-tip') || curto;
             return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
                    '<b onclick="desmarcarOrigem(\\'' + cb.value + '\\')">&times;</b></span>';
           }}).join('');
@@ -3096,8 +3210,8 @@ def relatorios():
             const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
             cont.innerHTML = marcados.map(cb => {{
               const lbl = cb.closest('.chip-opt');
-              const curto = lbl.textContent.trim();
-              const completo = lbl.getAttribute('title') || curto;
+              const curto = lbl.dataset.curto || lbl.textContent.trim();
+              const completo = lbl.getAttribute('data-tip') || curto;
               return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
                      '<b onclick="desmarcarFiltro(\\'' + cb.name + '\\', \\'' + cb.value + '\\')">&times;</b></span>';
             }}).join('');
@@ -3174,7 +3288,7 @@ def relatorios():
               '<div class="rel-grupo-row" style="cursor:pointer" onclick="toggleGrupoDetalhe(' + i + ')">' +
                 '<div style="flex:1">' +
                   '<div style="display:flex;justify-content:space-between">' +
-                    '<span>' + g.nome + ' <span style="color:#aaa">(' + g.qtd + ')</span></span>' +
+                    '<span>' + (g.selo || '') + g.nome + ' <span style="color:#aaa">(' + g.qtd + ')</span></span>' +
                     '<span>' + direita + '</span>' +
                   '</div>' +
                   '<div class="barra"><div style="width:' + larguraBarra + '%"></div></div>' +
@@ -3207,7 +3321,7 @@ def relatorios():
               el.innerHTML = '<table class="rel-mini-table"><thead><tr><th>Data</th><th>Descrição</th><th>Origem</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' +
                 data.lancamentos.map(l => (
                   '<tr><td>' + l.data + '</td><td>' + l.descricao + '</td>' +
-                  '<td title="' + (l.origem_completa || '') + '">' + l.origem + '</td><td>' + l.categoria + '</td>' +
+                  '<td data-tip="' + (l.origem_completa || '') + '">' + l.origem + '</td><td>' + l.categoria + '</td>' +
                   '<td class="valor">' + fmtMoeda(l.valor) + '</td></tr>'
                 )).join('') +
                 '</tbody></table>' +
@@ -3299,6 +3413,13 @@ def relatorios_dados():
     cur.close()
     conn.close()
 
+    def selo_grupo(g):
+        """Selo do banco quando agrupado por origem (o grafico usa so o nome puro)."""
+        if cfg["agrupar"] != "origem":
+            return ""
+        c = contas_by_id.get(str(g))
+        return c["selo"] if c else ""
+
     def nome_grupo(g):
         if cfg["agrupar"] == "categoria":
             return cat_pt(g)
@@ -3326,6 +3447,7 @@ def relatorios_dados():
         grupos.append({
             "valor": g["grupo"],
             "nome": nome_grupo(g["grupo"]),
+            "selo": selo_grupo(g["grupo"]),
             "qtd": g["qtd"],
             "total": round(total_g, 2),
             "pct": round(pct, 1),
@@ -3391,8 +3513,8 @@ def relatorios_lancamentos():
             return "-", "-"
         # se for cartao de credito e tiver apelido cadastrado, o apelido e mais informativo
         if c["tipo"] == "CREDIT" and r["numero_cartao_final"] and nomes_cartao.get(r["numero_cartao_final"]):
-            return nomes_cartao[r["numero_cartao_final"]], f'{c["label"]} - {nome_cartao_curto(r["numero_cartao_final"])}'
-        return c["label_curto"], c["label"]
+            return c["selo"] + nomes_cartao[r["numero_cartao_final"]], f'{c["label"]} - {nome_cartao_curto(r["numero_cartao_final"])}'
+        return c["selo"] + c["label_curto"], c["label"]
 
     lancamentos = []
     for r in rows:
