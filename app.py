@@ -367,28 +367,32 @@ def selo_banco_html(banco, tipo=None):
     return f'<span class="selo" style="background:{cor};color:{cor_texto}">{sigla}</span>'
 
 
-def origem_label(tipo, connector_name, nome_conta):
+def origem_label(tipo, connector_name, nome_conta, titular=None):
     """Rotulo amigavel (completo) de origem a partir do tipo da conta + nome do banco detectado."""
     banco = detectar_banco(nome_conta, connector_name)
     if tipo == "CREDIT":
-        return f"Cartão de Crédito {banco}"
-    if tipo == "BANK":
-        return f"Conta Corrente {banco}"
-    if tipo == "MANUAL":
-        return "Dinheiro (manual)"
-    return nome_conta or "Outra origem"
+        base = f"Cartão de Crédito {banco}"
+    elif tipo == "BANK":
+        base = f"Conta Corrente {banco}"
+    elif tipo == "MANUAL":
+        base = "Dinheiro (manual)"
+    else:
+        base = nome_conta or "Outra origem"
+    return f"{base} · {titular}" if titular else base
 
 
-def origem_label_curto(tipo, connector_name, nome_conta):
+def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
     """Rotulo curto de origem, usado na UI ao lado do selo do banco."""
     banco = detectar_banco(nome_conta, connector_name)
     if tipo == "CREDIT":
-        return f"Cartão {banco}"
-    if tipo == "BANK":
-        return f"Conta Corrente {banco}"
-    if tipo == "MANUAL":
-        return "Dinheiro"
-    return nome_conta or "Outra"
+        base = f"Cartão {banco}"
+    elif tipo == "BANK":
+        base = f"Conta Corrente {banco}"
+    elif tipo == "MANUAL":
+        base = "Dinheiro"
+    else:
+        base = nome_conta or "Outra"
+    return f"{base} ({titular})" if titular else base
 
 
 def carregar_origens(cur):
@@ -399,8 +403,9 @@ def carregar_origens(cur):
     detectamos o banco olhando todas as contas da conexao (item_id) e aplicamos para todas.
     """
     cur.execute(
-        "SELECT c.account_id, c.item_id, c.tipo, c.nome, c.numero_final, p.connector_name "
+        "SELECT c.account_id, c.item_id, c.tipo, c.nome, c.numero_final, p.connector_name, it.titular "
         "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
+        "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
         "ORDER BY c.tipo, p.connector_name;"
     )
     contas = cur.fetchall()
@@ -415,12 +420,13 @@ def carregar_origens(cur):
     opcoes = []
     for c in contas:
         banco = banco_por_item.get(c["item_id"], c["connector_name"])
-        completo = origem_label(c["tipo"], banco, c["nome"])
-        curto = origem_label_curto(c["tipo"], banco, c["nome"])
+        titular = c["titular"]
+        completo = origem_label(c["tipo"], banco, c["nome"], titular)
+        curto = origem_label_curto(c["tipo"], banco, c["nome"], titular)
         selo = selo_banco_html(detectar_banco(c["nome"], banco), c["tipo"])
         aid = str(c["account_id"])
         contas_by_id[aid] = {
-            **c, "banco": banco, "label": completo, "label_curto": curto, "selo": selo,
+            **c, "banco": banco, "label": completo, "label_curto": curto, "selo": selo, "titular": titular,
         }
         # (valor, html com selo, titulo do tooltip, texto sem html)
         opcoes.append((aid, f"{selo}{curto}", completo, curto))
@@ -650,6 +656,8 @@ def proxima_ocorrencia_dia(dia):
 def cat_pt(categoria):
     if not categoria:
         return "-"
+    if categoria in CATEGORIA_PT_DB:
+        return CATEGORIA_PT_DB[categoria]
     return CATEGORIA_PT.get(categoria, categoria)
 
 
@@ -659,6 +667,27 @@ def chave_alfa(texto):
     texto = (texto or "").strip().casefold()
     sem_acento = unicodedata.normalize("NFKD", texto)
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
+
+
+# Overrides de nome de categoria e categorias ocultas, definidos pelo usuario
+# em /categorias. Cache em memoria (processo unico) recarregado a cada escrita.
+CATEGORIA_PT_DB = {}
+CATEGORIAS_OCULTAS = set()
+
+
+def recarregar_categorias_db():
+    global CATEGORIA_PT_DB, CATEGORIAS_OCULTAS
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT categoria, nome_pt FROM cartao.categoria;")
+        CATEGORIA_PT_DB = {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute("SELECT categoria FROM cartao.categoria_oculta;")
+        CATEGORIAS_OCULTAS = {r[0] for r in cur.fetchall()}
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
 
 
 def get_ultima_sincronizacao():
@@ -805,6 +834,18 @@ def migrate():
         cur.execute(
             "CREATE TABLE IF NOT EXISTS cartao.categoria_natureza ("
             "categoria text PRIMARY KEY, natureza text NOT NULL DEFAULT 'despesa');"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.categoria ("
+            "categoria text PRIMARY KEY, nome_pt text NOT NULL, criado_em timestamptz DEFAULT now());"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.categoria_oculta (categoria text PRIMARY KEY);"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS cartao.item_titular ("
+            "item_id uuid PRIMARY KEY REFERENCES cartao.pluggy_item(item_id) ON DELETE CASCADE, "
+            "titular text NOT NULL);"
         )
         for categoria, natureza in SEED_NATUREZAS.items():
             cur.execute(
@@ -988,6 +1029,7 @@ SEED_GRUPOS = [
 ]
 
 migrate()
+recarregar_categorias_db()
 
 
 BASE_CSS_HEAD = """
@@ -1311,11 +1353,13 @@ def topbar_html(titulo, ativo=None):
           {f'''<div class="dropdown">
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
             <div class="dropdown-content">
+              {f'<a href="/categorias" class="{cls("categorias")}">Gerenciar categorias</a>' if pode("cadastros") else ""}
               {f'<a href="/naturezas" class="{cls("naturezas")}">Natureza das categorias</a>' if pode("cadastros") else ""}
               {f'<a href="/grupos" class="{cls("grupos")}">Gerenciar grupos</a>' if pode("cadastros") else ""}
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
               {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
               {f'<a href="/cartoes" class="{cls("cartoes")}">Gerenciar cartões</a>' if pode("cadastros") else ""}
+              {f'<a href="/contas" class="{cls("contas")}">Gerenciar contas</a>' if pode("cadastros") else ""}
               {f'<a href="/usuarios" class="{cls("usuarios")}">Usuários e permissões</a>' if pode("usuarios") else ""}
             </div>
           </div>''' if (pode("cadastros") or pode("usuarios")) else ""}
@@ -1542,7 +1586,7 @@ def index():
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
-    categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: chave_alfa(cat_pt(c)))
+    categorias = sorted((categorias_db | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS, key=lambda c: chave_alfa(cat_pt(c)))
 
     where = ["to_char(t.data_transacao, 'YYYY-MM') = %s"]
     params = [mes]
@@ -2581,7 +2625,7 @@ def regras_view():
     total_aplicadas = cur.fetchone()["n"]
 
     todas_categorias = sorted(
-        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_NEUTRAS_PADRAO - CATEGORIAS_OCULTAS,
         key=lambda c: chave_alfa(cat_pt(c)),
     )
 
@@ -3091,7 +3135,7 @@ def grupos_view():
         return "".join(opts)
 
     todas_categorias = sorted(
-        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA)) - CATEGORIAS_NEUTRAS_PADRAO,
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_NEUTRAS_PADRAO - CATEGORIAS_OCULTAS,
         key=lambda c: chave_alfa(cat_pt(c)),
     )
     categorias_rows = "".join(
@@ -3276,7 +3320,7 @@ def relatorios():
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
-    todas_categorias = sorted(categorias_db | set(CATEGORIAS_EXTRA), key=lambda c: chave_alfa(cat_pt(c)))
+    todas_categorias = sorted((categorias_db | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS, key=lambda c: chave_alfa(cat_pt(c)))
 
     cur.execute("SELECT DISTINCT numero_cartao_final FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;")
     finais_usados = sorted({r["numero_cartao_final"] for r in cur.fetchall()})
@@ -4195,6 +4239,274 @@ def investimentos_view():
     """
 
 
+@app.route("/contas", methods=["GET", "POST"])
+@requer("cadastros")
+def contas_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    aviso = erro = None
+
+    if request.method == "POST":
+        item_id = request.form.get("item_id")
+        titular = (request.form.get("titular") or "").strip()
+        try:
+            if not titular:
+                cur.execute("DELETE FROM cartao.item_titular WHERE item_id = %s;", (item_id,))
+                aviso = "Titular removido dessa conexão."
+            else:
+                cur.execute(
+                    "INSERT INTO cartao.item_titular (item_id, titular) VALUES (%s,%s) "
+                    "ON CONFLICT (item_id) DO UPDATE SET titular = EXCLUDED.titular;",
+                    (item_id, titular),
+                )
+                aviso = f'Titular salvo: "{titular}".'
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            erro = str(e)
+
+    cur.execute(
+        "SELECT c.item_id, c.account_id, c.tipo, c.nome, c.numero_final, p.connector_name, it.titular "
+        "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
+        "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
+        "ORDER BY p.connector_name, c.tipo;"
+    )
+    linhas = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    conexoes = {}
+    for r in linhas:
+        item_id = str(r["item_id"])
+        banco = detectar_banco(r["nome"], r["connector_name"])
+        info = conexoes.setdefault(item_id, {"banco": banco, "titular": r["titular"], "contas": []})
+        tipo_pt = {"CREDIT": "Cartão de crédito", "BANK": "Conta corrente", "MANUAL": "Dinheiro (manual)"}.get(r["tipo"], r["tipo"])
+        detalhe = tipo_pt
+        if r["numero_final"]:
+            detalhe += f" · final {r['numero_final']}"
+        info["contas"].append(detalhe)
+
+    sugestoes = ["Ronaldo", "Andrea", "Ronaldo e Andrea", "Compartilhado"]
+    datalist_html = "".join(f'<option value="{s}">' for s in sugestoes)
+
+    def linha(item_id, info):
+        selo = selo_banco_html(info["banco"])
+        contas_txt = ", ".join(info["contas"])
+        titular_atual = info["titular"] or ""
+        return f"""
+        <div class="cat-breakdown" style="padding:16px 18px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+            <div style="display:flex;align-items:center;gap:9px">
+              {selo}
+              <div>
+                <div style="font-weight:600;font-size:14px">{info["banco"]}</div>
+                <div style="font-size:12px;color:var(--ink-faint)">{contas_txt}</div>
+              </div>
+            </div>
+            <form method="post" style="display:flex;gap:8px;align-items:center">
+              <input type="hidden" name="item_id" value="{item_id}">
+              <input name="titular" list="sugestoes-titular" value="{titular_atual}" placeholder="De quem é essa conta?"
+                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+              <button type="submit" class="ver-btn">Salvar</button>
+            </form>
+          </div>
+        </div>
+        """
+
+    blocos = "".join(linha(item_id, info) for item_id, info in conexoes.items())
+    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
+    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
+
+    return f"""
+    <html><head><title>Gerenciar contas · Pé de Meia</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Gerenciar contas', 'contas')}
+      <div class="wrap">
+        {aviso_html}{erro_html}
+        <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px">
+          Diga de quem é cada conta/conexão importada do banco. Isso aparece junto do nome do banco
+          nos lançamentos, relatórios e em qualquer lugar que mostre a origem do dinheiro.
+        </div>
+        <datalist id="sugestoes-titular">{datalist_html}</datalist>
+        {blocos}
+      </div>
+    </body></html>
+    """
+
+
+@app.route("/categorias", methods=["GET", "POST"])
+@requer("cadastros")
+def categorias_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    aviso = erro = None
+
+    def contar_uso(categoria):
+        cur.execute("SELECT COUNT(*) AS n FROM cartao.transacao WHERE categoria = %s;", (categoria,))
+        return cur.fetchone()["n"]
+
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        try:
+            if acao == "criar":
+                nome = (request.form.get("nome") or "").strip()
+                if not nome:
+                    erro = "Informe o nome da categoria."
+                elif nome in CATEGORIA_PT.values() or nome in CATEGORIA_PT_DB.values():
+                    erro = "Já existe uma categoria com esse nome."
+                else:
+                    cur.execute(
+                        "INSERT INTO cartao.categoria (categoria, nome_pt) VALUES (%s,%s) "
+                        "ON CONFLICT (categoria) DO UPDATE SET nome_pt = EXCLUDED.nome_pt;",
+                        (nome, nome),
+                    )
+                    cur.execute("DELETE FROM cartao.categoria_oculta WHERE categoria = %s;", (nome,))
+                    conn.commit()
+                    aviso = f'Categoria "{nome}" criada.'
+
+            elif acao == "renomear":
+                categoria = request.form.get("categoria") or ""
+                novo_nome = (request.form.get("novo_nome") or "").strip()
+                if not novo_nome:
+                    erro = "Informe o novo nome."
+                else:
+                    cur.execute(
+                        "INSERT INTO cartao.categoria (categoria, nome_pt) VALUES (%s,%s) "
+                        "ON CONFLICT (categoria) DO UPDATE SET nome_pt = EXCLUDED.nome_pt;",
+                        (categoria, novo_nome),
+                    )
+                    conn.commit()
+                    aviso = f'Categoria renomeada para "{novo_nome}".'
+
+            elif acao == "mover":
+                origem = request.form.get("origem") or ""
+                destino = request.form.get("destino") or ""
+                if not origem or not destino:
+                    erro = "Escolha a categoria de origem e a de destino."
+                elif origem == destino:
+                    erro = "Escolha categorias diferentes para mover."
+                else:
+                    cur.execute(
+                        "UPDATE cartao.transacao SET categoria = %s WHERE categoria = %s;",
+                        (destino, origem),
+                    )
+                    qtd = cur.rowcount
+                    conn.commit()
+                    aviso = f'{qtd} lançamento(s) movido(s) de "{cat_pt(origem)}" para "{cat_pt(destino)}".'
+
+            elif acao == "excluir":
+                categoria = request.form.get("categoria") or ""
+                qtd = contar_uso(categoria)
+                if qtd > 0:
+                    erro = f'Não é possível remover: existem {qtd} lançamento(s) nessa categoria. Mova-os primeiro.'
+                else:
+                    cur.execute("DELETE FROM cartao.categoria WHERE categoria = %s;", (categoria,))
+                    cur.execute("DELETE FROM cartao.categoria_natureza WHERE categoria = %s;", (categoria,))
+                    cur.execute("DELETE FROM cartao.categoria_subgrupo WHERE categoria = %s;", (categoria,))
+                    cur.execute("INSERT INTO cartao.categoria_oculta (categoria) VALUES (%s) ON CONFLICT DO NOTHING;", (categoria,))
+                    conn.commit()
+                    aviso = f'Categoria "{cat_pt(categoria)}" removida.'
+        except Exception as e:
+            conn.rollback()
+            erro = str(e)
+        recarregar_categorias_db()
+
+    cur.execute(
+        f"SELECT t.categoria, COUNT(*) AS qtd, SUM({VAL_DESPESA}) AS total "
+        f"FROM cartao.transacao t JOIN cartao.conta c ON c.account_id = t.account_id "
+        "WHERE t.categoria IS NOT NULL "
+        "GROUP BY t.categoria;"
+    )
+    usadas = {r["categoria"]: r for r in cur.fetchall()}
+    cur.close()
+    conn.close()
+
+    todas = sorted(
+        (set(usadas) | set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS,
+        key=lambda c: chave_alfa(cat_pt(c)),
+    )
+
+    def opcoes_destino(atual):
+        return "".join(
+            f'<option value="{c}">{cat_pt(c)}</option>'
+            for c in todas if c != atual
+        )
+
+    def linha(c):
+        info = usadas.get(c)
+        qtd = info["qtd"] if info else 0
+        total = float(info["total"] or 0) if info else 0.0
+        pode_excluir = qtd == 0
+        btn_excluir = (
+            f'<form method="post" onsubmit="return confirm(\'Remover a categoria {cat_pt(c)}?\')">'
+            f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="categoria" value="{c}">'
+            f'<button type="submit" class="ver-btn">Remover</button></form>'
+            if pode_excluir else
+            f'<span data-tip="Existem lançamentos nessa categoria. Mova-os para outra categoria antes de remover." '
+            f'style="font-size:11px;color:var(--ink-faint);cursor:help">{qtd} lanç. — protegida</span>'
+        )
+        return f"""
+        <tr>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="acao" value="renomear"><input type="hidden" name="categoria" value="{c}">
+              <input name="novo_nome" value="{cat_pt(c)}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">
+              <button type="submit" class="ver-btn">Salvar</button>
+            </form>
+            <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">{c}</div>
+          </td>
+          <td class="valor">{qtd or "-"}</td>
+          <td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="acao" value="mover"><input type="hidden" name="origem" value="{c}">
+              <select name="destino" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;max-width:180px">
+                <option value="">mover lançamentos para…</option>
+                {opcoes_destino(c)}
+              </select>
+              <button type="submit" class="ver-btn"{" disabled" if not qtd else ""}>Mover</button>
+            </form>
+          </td>
+          <td>{btn_excluir}</td>
+        </tr>
+        """
+
+    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
+    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
+
+    return f"""
+    <html><head><title>Gerenciar categorias · Pé de Meia</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Gerenciar categorias', 'categorias')}
+      <div class="wrap">
+        {aviso_html}{erro_html}
+        <div class="cat-breakdown">
+          <h3>Nova categoria</h3>
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="criar">
+            <input name="nome" placeholder="Nome da categoria" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:240px">
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar categoria</button>
+          </form>
+        </div>
+        <div class="cat-breakdown">
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
+            Renomeie, mova lançamentos entre categorias ou remova categorias vazias.
+            Uma categoria só pode ser removida quando não tiver nenhum lançamento — mova os lançamentos para outra
+            categoria primeiro, usando a coluna "Mover".
+          </div>
+          <table class="compacta">
+            <thead><tr>
+              <th>Categoria</th><th style="text-align:right">Lanç.</th>
+              <th style="text-align:right">Total</th><th>Mover lançamentos</th><th>Remover</th>
+            </tr></thead>
+            <tbody>{"".join(linha(c) for c in todas)}</tbody>
+          </table>
+        </div>
+      </div>
+    </body></html>
+    """
+
+
 @app.route("/naturezas", methods=["GET", "POST"])
 @requer("cadastros")
 def naturezas_view():
@@ -4226,7 +4538,7 @@ def naturezas_view():
     cur.close()
     conn.close()
 
-    categorias = sorted(set(usadas) | set(CATEGORIAS_EXTRA) | set(atual), key=lambda c: chave_alfa(cat_pt(c)))
+    categorias = sorted((set(usadas) | set(CATEGORIAS_EXTRA) | set(atual) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS, key=lambda c: chave_alfa(cat_pt(c)))
 
     def linha(c):
         nat = atual.get(c, NATUREZA_PADRAO)
