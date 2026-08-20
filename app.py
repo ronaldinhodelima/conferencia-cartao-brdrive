@@ -36,8 +36,12 @@ app.config.update(
 # depois do primeiro boot os usuarios passam a viver na tabela cartao.usuario,
 # com senha guardada em hash. Trocar a senha pela tela nao depende mais da env.
 USERS = {
-    os.environ.get("APP_USER_1", "ronaldo"): os.environ.get("APP_PASS_1", "changeme1"),
-    os.environ.get("APP_USER_2", "andrea"): os.environ.get("APP_PASS_2", "changeme2"),
+    login: senha
+    for login, senha in (
+        (os.environ.get("APP_USER_1", "ronaldo"), os.environ.get("APP_PASS_1")),
+        (os.environ.get("APP_USER_2", "andrea"), os.environ.get("APP_PASS_2")),
+    )
+    if senha  # sem senha na env, essa conta de emergencia fica desativada
 }
 
 # ---------------------------------------------------------------------------
