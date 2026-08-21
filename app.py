@@ -1183,7 +1183,7 @@ BASE_CSS = BASE_CSS_HEAD + """
   table.compacta th { padding: 8px 8px; font-size: 10px; }
   table.compacta td { padding: 5px 8px; font-size: 12.5px; }
   table.compacta .cel-data { width: 78px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.25; }
-  table.compacta .cel-desc { width: auto; min-width: 240px; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.compacta .cel-desc { width: auto; min-width: 360px; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   table.compacta .cel-origem { width: 158px; overflow: hidden; color: var(--ink-soft); font-size: 11.5px; }
   table.compacta .cel-valor { width: 96px; }
   table.compacta .cel-check { width: 42px; text-align: center; }
