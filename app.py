@@ -4192,7 +4192,7 @@ def categorias_view():
                     )
                     cur.execute("DELETE FROM cartao.categoria_oculta WHERE categoria = %s;", (nome,))
                     conn.commit()
-                    aviso = f'Categoria "{esc(nome)}" criada.'
+                    aviso = f'Categoria "{nome}" criada.'
 
             elif acao == "renomear":
                 categoria = request.form.get("categoria") or ""
@@ -4206,7 +4206,7 @@ def categorias_view():
                         (categoria, novo_nome),
                     )
                     conn.commit()
-                    aviso = f'Categoria renomeada para "{esc(novo_nome)}".'
+                    aviso = f'Categoria renomeada para "{novo_nome}".'
 
             elif acao == "mover":
                 origem = request.form.get("origem") or ""
@@ -4222,7 +4222,7 @@ def categorias_view():
                     )
                     qtd = cur.rowcount
                     conn.commit()
-                    aviso = f'{qtd} lançamento(s) movido(s) de "{cat_pt(origem)}" para "{cat_pt(destino)}".'
+                    aviso = f'{qtd} lançamento(s) movido(s) de "{cat_pt_puro(origem)}" para "{cat_pt_puro(destino)}".'
 
             elif acao == "excluir":
                 categoria = request.form.get("categoria") or ""
@@ -4235,7 +4235,7 @@ def categorias_view():
                     cur.execute("DELETE FROM cartao.categoria_subgrupo WHERE categoria = %s;", (categoria,))
                     cur.execute("INSERT INTO cartao.categoria_oculta (categoria) VALUES (%s) ON CONFLICT DO NOTHING;", (categoria,))
                     conn.commit()
-                    aviso = f'Categoria "{cat_pt(categoria)}" removida.'
+                    aviso = f'Categoria "{cat_pt_puro(categoria)}" removida.'
         except Exception as e:
             conn.rollback()
             erro = str(e)
@@ -4256,160 +4256,32 @@ def categorias_view():
 
     todas = sorted(
         (set(usadas) | set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS,
-        key=lambda c: chave_alfa(cat_pt(c)),
+        key=lambda c: chave_alfa(cat_pt_puro(c)),
     )
 
-    def opcoes_destino(atual):
-        return "".join(
-            f'<option value="{esc(c)}">{cat_pt(c)}</option>'
-            for c in todas if c != atual
-        )
-
-    def linha(c):
+    # uma lista de dicts prontos, pro template so exibir. 'chave' e o identificador
+    # que vai nos forms; 'nome' e o rotulo traduzido que o usuario le.
+    categorias = []
+    for c in todas:
         info = usadas.get(c)
-        qtd = info["qtd"] if info else 0
-        total = float(info["total"] or 0) if info else 0.0
-        pode_excluir = qtd == 0
-        btn_excluir = (
-            f'<form method="post" onsubmit="return confirm(\'Remover a categoria {cat_pt(c)}?\')">'
-            f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="categoria" value="{esc(c)}">'
-            f'<button type="submit" class="ver-btn">Remover</button></form>'
-            if pode_excluir else
-            f'<button type="button" data-categoria="{esc(c)}" onclick="verLancamentosCategoria(this)" '
-            f'data-tip="Existem lançamentos nessa categoria. Clique para ver quais são." '
-            f'style="font-size:11px;color:var(--ink-faint);background:none;border:none;padding:0;'
-            f'text-decoration:underline;cursor:pointer">{qtd} lanç. — protegida</button>'
-        )
-        nat = naturezas_atuais.get(c, NATUREZA_PADRAO)
-        opts_natureza = "".join(
-            f'<option value="{k}" {"selected" if k == nat else ""}>{v}</option>'
-            for k, v in NATUREZAS.items()
-        )
-        aviso_nat = "" if nat == "despesa" else '<span style="color:var(--ink-faint);font-size:11px"> fora do resultado</span>' if nat in NATUREZAS_NEUTRAS else ""
-        return f"""
-        <tr>
-          <td>
-            <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="renomear"><input type="hidden" name="categoria" value="{esc(c)}">
-              <input name="novo_nome" value="{cat_pt(c)}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">
-              <button type="submit" class="ver-btn">Salvar</button>
-            </form>
-            <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">{esc(c)}</div>
-          </td>
-          <td class="valor">{qtd or "-"}</td>
-          <td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>
-          <td>
-            <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="natureza"><input type="hidden" name="categoria" value="{esc(c)}">
-              <select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">{opts_natureza}</select>
-              {aviso_nat}
-            </form>
-          </td>
-          <td>
-            <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="mover"><input type="hidden" name="origem" value="{esc(c)}">
-              <select name="destino" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;max-width:180px">
-                <option value="">mover lançamentos para…</option>
-                {opcoes_destino(c)}
-              </select>
-              <button type="submit" class="ver-btn"{" disabled" if not qtd else ""}>Mover</button>
-            </form>
-          </td>
-          <td>{btn_excluir}</td>
-        </tr>
-        """
+        categorias.append({
+            "chave": c,
+            "nome": cat_pt_puro(c),
+            "qtd": info["qtd"] if info else 0,
+            "total": float(info["total"] or 0) if info else 0.0,
+            "natureza": naturezas_atuais.get(c, NATUREZA_PADRAO),
+        })
 
-    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
-    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
-
-    return f"""
-    <html><head><title>Gerenciar categorias · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Gerenciar categorias', 'categorias')}
-      <div class="wrap">
-        {aviso_html}{erro_html}
-        <div class="cat-breakdown">
-          <h3>Nova categoria</h3>
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="criar">
-            <input name="nome" placeholder="Nome da categoria" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:240px">
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar categoria</button>
-          </form>
-        </div>
-        <details class="cat-breakdown">
-          <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">O que é cada natureza?</summary>
-          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
-            O DRE mede o <strong>resultado</strong> do período: Receitas − Despesas. Nem todo dinheiro que sai é despesa.
-            <ul style="margin:8px 0 0 0;padding-left:18px">
-              <li><strong>Receita</strong> — entra e aumenta seu patrimônio (salário, PIX recebido, depósitos).</li>
-              <li><strong>Despesa</strong> — sai e não volta: consumo, juros, tarifas. É o que reduz o resultado.</li>
-              <li><strong>Investimento</strong> — aplicação financeira, previdência. Você continua com o dinheiro, em outra forma. Não é despesa.</li>
-              <li><strong>Aquisição de bem</strong> — terreno, veículo, imóvel. Troca de dinheiro por bem: não entra no resultado.
-                  O que entraria é a depreciação (e terreno não deprecia).</li>
-              <li><strong>Transferência</strong> — pagamento de fatura do cartão, movimentação entre contas próprias. Só troca de bolso.</li>
-              <li><strong>Depende da direção</strong> — PIX, TED, dinheiro: o que entra vira receita, o que sai vira despesa.</li>
-            </ul>
-          </div>
-        </details>
-        <div class="cat-breakdown">
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
-            Renomeie, defina a natureza contábil, mova lançamentos entre categorias ou remova categorias vazias.
-            Uma categoria só pode ser removida quando não tiver nenhum lançamento — mova os lançamentos para outra
-            categoria primeiro, usando a coluna "Mover".
-          </div>
-          <div class="tabela-scroll">
-          <table class="compacta ajustavel" data-tabela="categorias">
-            <thead><tr>
-              <th>Categoria</th><th style="text-align:right">Lanç.</th>
-              <th style="text-align:right">Total</th><th>Natureza</th><th>Mover lançamentos</th><th>Remover</th>
-            </tr></thead>
-            <tbody>{"".join(linha(c) for c in todas)}</tbody>
-          </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="modal-bg" id="modalLancBg" onclick="if(event.target===this) fecharModalLanc()">
-        <div class="modal" style="width:520px">
-          <span class="close" onclick="fecharModalLanc()">&times;</span>
-          <h3 id="modalLancTitulo">Lançamentos</h3>
-          <div id="modalLancBody" style="max-height:60vh;overflow-y:auto"></div>
-        </div>
-      </div>
-      <script>
-        function escHtml(s) {{
-          return String(s ?? '').replace(/[&<>"']/g, c => ({{
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-          }})[c]);
-        }}
-        function fecharModalLanc() {{
-          document.getElementById('modalLancBg').classList.remove('show');
-        }}
-        function verLancamentosCategoria(btn) {{
-          const categoria = btn.dataset.categoria;
-          const corpo = document.getElementById('modalLancBody');
-          document.getElementById('modalLancTitulo').textContent = 'Lançamentos — ' + btn.closest('tr').querySelector('input[name=novo_nome]').value;
-          corpo.innerHTML = '<div style="padding:12px 0;color:var(--ink-faint);font-size:13px">Carregando…</div>';
-          document.getElementById('modalLancBg').classList.add('show');
-          fetch('/api/categoria-lancamentos?categoria=' + encodeURIComponent(categoria))
-            .then(r => r.json())
-            .then(lista => {{
-              if (!lista.length) {{
-                corpo.innerHTML = '<div style="padding:12px 0;color:var(--ink-faint);font-size:13px">Nenhum lançamento encontrado.</div>';
-                return;
-              }}
-              corpo.innerHTML = lista.map(l =>
-                '<div class="row"><span>' + escHtml(l.data) + ' — ' + escHtml(l.descricao) + '</span>' +
-                '<span>R$ ' + l.valor.toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}}) + '</span></div>'
-              ).join('');
-            }})
-            .catch(() => {{
-              corpo.innerHTML = '<div style="padding:12px 0;color:var(--bad)">Erro ao carregar os lançamentos.</div>';
-            }});
-        }}
-      </script>
-    </body></html>
-    """
+    return render_template(
+        "categorias.html",
+        titulo="Gerenciar categorias",
+        topbar=topbar_html("Gerenciar categorias", "categorias"),
+        aviso=aviso,
+        erro=erro,
+        categorias=categorias,
+        naturezas=NATUREZAS,
+        naturezas_neutras=NATUREZAS_NEUTRAS,
+    )
 
 
 @app.route("/naturezas", methods=["GET", "POST"])

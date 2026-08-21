@@ -1,3 +1,11 @@
+// Escapa texto antes de jogar em innerHTML. Fica aqui por ser compartilhado:
+// varias telas montam HTML no cliente a partir de dado vindo do banco.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
+
 // ---------- colunas ajustaveis (compartilhado por todas as telas) ----------
 // Marque a tabela com class="ajustavel" e data-tabela="chave-unica" que o resto
 // e automatico: as colunas ganham data-col por indice (se ainda nao tiverem),

@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+<div class="cat-breakdown">
+  <h3>Nova categoria</h3>
+  <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="criar">
+    <input name="nome" placeholder="Nome da categoria"
+           style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:240px">
+    <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">
+      Criar categoria
+    </button>
+  </form>
+</div>
+
+<details class="cat-breakdown">
+  <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">O que é cada natureza?</summary>
+  <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
+    O DRE mede o <strong>resultado</strong> do período: Receitas − Despesas. Nem todo dinheiro que sai é despesa.
+    <ul style="margin:8px 0 0 0;padding-left:18px">
+      <li><strong>Receita</strong> — entra e aumenta seu patrimônio (salário, PIX recebido, depósitos).</li>
+      <li><strong>Despesa</strong> — sai e não volta: consumo, juros, tarifas. É o que reduz o resultado.</li>
+      <li><strong>Investimento</strong> — aplicação financeira, previdência. Você continua com o dinheiro, em outra forma. Não é despesa.</li>
+      <li><strong>Aquisição de bem</strong> — terreno, veículo, imóvel. Troca de dinheiro por bem: não entra no resultado.
+          O que entraria é a depreciação (e terreno não deprecia).</li>
+      <li><strong>Transferência</strong> — pagamento de fatura do cartão, movimentação entre contas próprias. Só troca de bolso.</li>
+      <li><strong>Depende da direção</strong> — PIX, TED, dinheiro: o que entra vira receita, o que sai vira despesa.</li>
+    </ul>
+  </div>
+</details>
+
+<div class="cat-breakdown">
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
+    Renomeie, defina a natureza contábil, mova lançamentos entre categorias ou remova categorias
+    vazias. Uma categoria só pode ser removida quando não tiver nenhum lançamento — mova os
+    lançamentos para outra categoria primeiro, usando a coluna "Mover".
+  </div>
+  <div class="tabela-scroll">
+  <table class="compacta ajustavel" data-tabela="categorias">
+    <thead><tr>
+      <th>Categoria</th><th style="text-align:right">Lanç.</th>
+      <th style="text-align:right">Total</th><th>Natureza</th><th>Mover lançamentos</th><th>Remover</th>
+    </tr></thead>
+    <tbody>
+      {% for c in categorias %}
+      <tr>
+        <td>
+          <form method="post" style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="acao" value="renomear">
+            <input type="hidden" name="categoria" value="{{ c.chave }}">
+            <input name="novo_nome" value="{{ c.nome }}"
+                   style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">
+            <button type="submit" class="ver-btn">Salvar</button>
+          </form>
+          <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">{{ c.chave }}</div>
+        </td>
+        <td class="valor">{{ c.qtd or "-" }}</td>
+        <td class="valor">{% if c.qtd %}{{ c.total|moeda }}{% else %}-{% endif %}</td>
+        <td>
+          <form method="post" style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="acao" value="natureza">
+            <input type="hidden" name="categoria" value="{{ c.chave }}">
+            <select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">
+              {% for chave, rotulo in naturezas.items() %}
+              <option value="{{ chave }}" {% if chave == c.natureza %}selected{% endif %}>{{ rotulo }}</option>
+              {% endfor %}
+            </select>
+            {% if c.natureza in naturezas_neutras %}
+            <span style="color:var(--ink-faint);font-size:11px"> fora do resultado</span>
+            {% endif %}
+          </form>
+        </td>
+        <td>
+          <form method="post" style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="acao" value="mover">
+            <input type="hidden" name="origem" value="{{ c.chave }}">
+            <select name="destino" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;max-width:180px">
+              <option value="">mover lançamentos para…</option>
+              {% for d in categorias if d.chave != c.chave %}
+              <option value="{{ d.chave }}">{{ d.nome }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="ver-btn" {% if not c.qtd %}disabled{% endif %}>Mover</button>
+          </form>
+        </td>
+        <td>
+          {% if c.qtd %}
+            <button type="button" data-categoria="{{ c.chave }}" onclick="verLancamentosCategoria(this)"
+                    data-tip="Existem lançamentos nessa categoria. Clique para ver quais são."
+                    style="font-size:11px;color:var(--ink-faint);background:none;border:none;padding:0;
+                           text-decoration:underline;cursor:pointer">{{ c.qtd }} lanç. — protegida</button>
+          {% else %}
+            <form method="post" onsubmit="return confirm('Remover a categoria {{ c.nome }}?')">
+              <input type="hidden" name="acao" value="excluir">
+              <input type="hidden" name="categoria" value="{{ c.chave }}">
+              <button type="submit" class="ver-btn">Remover</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalLancBg" onclick="if(event.target===this) fecharModalLanc()">
+  <div class="modal" style="width:520px">
+    <span class="close" onclick="fecharModalLanc()">&times;</span>
+    <h3 id="modalLancTitulo">Lançamentos</h3>
+    <div id="modalLancBody" style="max-height:60vh;overflow-y:auto"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="/static/categorias.js"></script>{% endblock %}
