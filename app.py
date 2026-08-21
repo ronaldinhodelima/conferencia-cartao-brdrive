@@ -1580,9 +1580,17 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
       const inp = td.querySelector('input[type=text]');
       if (inp) return inp.value.toLowerCase();
       const txt = td.textContent.trim();
-      // numero em formato brasileiro (R$ 1.234,56 / -12,5%) ordena como numero
-      const limpo = txt.replace(/[R$\s%]/g, '').replace(/\./g, '').replace(',', '.');
-      if (limpo !== '' && !isNaN(Number(limpo))) return Number(limpo);
+      // valor monetario/percentual ordena como numero. O separador decimal e o
+      // ULTIMO '.' ou ',' que aparecer - assim funciona tanto no formato que o
+      // app usa hoje (R$ 1,234.56, do :,.2f do Python) quanto no brasileiro
+      // (R$ 1.234,56), sem depender de qual esta em uso.
+      const limpo = txt.replace(/[R$\s%]/g, '');
+      const ultVirgula = limpo.lastIndexOf(',');
+      const ultPonto = limpo.lastIndexOf('.');
+      const numerico = ultVirgula > ultPonto
+        ? limpo.replace(/\./g, '').replace(',', '.')   // decimal e virgula
+        : limpo.replace(/,/g, '');                     // decimal e ponto (ou sem decimal)
+      if (numerico !== '' && numerico !== '-' && !isNaN(Number(numerico))) return Number(numerico);
       return txt.toLowerCase();
     }
     function ordenarLinhas(col, dir) {
