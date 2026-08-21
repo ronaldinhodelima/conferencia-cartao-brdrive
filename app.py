@@ -1665,6 +1665,7 @@ def topbar_html(titulo, ativo=None):
           {f'''<div class="dropdown">
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
             <div class="dropdown-content">
+              {f'<a href="/pendencias" class="{cls("pendencias")}">Pendências de classificação</a>' if pode("cadastros") else ""}
               {f'<a href="/categorias" class="{cls("categorias")}">Gerenciar categorias</a>' if pode("cadastros") else ""}
               {f'<a href="/grupos" class="{cls("grupos")}">Centro de Custos</a>' if pode("cadastros") else ""}
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
@@ -3220,6 +3221,9 @@ def dre():
         )
         por_dimensao.append({"nome": d["nome"], "linhas": cur.fetchall()})
 
+    # o DRE e onde a ma classificacao vira numero errado - avisa aqui
+    aviso_pend = aviso_pendencias_html(levantar_pendencias(cur)) if pode("cadastros") else ""
+
     cur.close()
     conn.close()
 
@@ -3328,6 +3332,7 @@ def dre():
     <body>
       {topbar_html('DRE / Centro de Custos', 'dre')}
       <div class="wrap">
+        {aviso_pend}
         <div class="filters">
           <div>
             <label>Ano</label>
@@ -4789,6 +4794,255 @@ def api_categoria_lancamentos():
         }
         for r in rows
     ])
+
+
+def levantar_pendencias(cur):
+    """Levanta o que esta mal classificado e pode distorcer o DRE.
+
+    Tres coisas, em ordem de gravidade contabil:
+
+    1. categoria SEM natureza definida - o app assume 'despesa' por padrao, entao
+       uma categoria nova que o Pluggy inventou (ex: um investimento) entra como
+       despesa silenciosamente e infla o resultado. E o caso mais grave porque
+       ninguem decidiu nada: aconteceu sozinho.
+    2. categoria de DESPESA sem centro de custo - nao afeta o resultado (a despesa
+       e contada de qualquer forma), mas some dos totais por grupo do DRE. So vale
+       para despesa: vincular receita ou transferencia a centro de custo nao faz
+       sentido contabil (centro de custo e analise de gasto).
+    3. lancamentos com natureza manual - excecao marcada no proprio lancamento, que
+       sobrepoe a natureza da categoria. Funciona, mas fica invisivel: o certo e
+       mover o lancamento para uma categoria que ja tenha a natureza correta.
+    """
+    cur.execute(
+        "SELECT DISTINCT t.categoria FROM cartao.transacao t "
+        "LEFT JOIN cartao.categoria_natureza n ON n.categoria = t.categoria "
+        "WHERE t.categoria IS NOT NULL AND n.categoria IS NULL;"
+    )
+    sem_natureza = sorted(
+        (r["categoria"] for r in cur.fetchall() if r["categoria"] not in CATEGORIAS_OCULTAS),
+        key=lambda c: chave_alfa(cat_pt(c)),
+    )
+
+    cur.execute(
+        "SELECT DISTINCT t.categoria FROM cartao.transacao t "
+        "JOIN cartao.categoria_natureza n ON n.categoria = t.categoria "
+        "LEFT JOIN cartao.categoria_subgrupo cs ON cs.categoria = t.categoria "
+        "WHERE n.natureza = 'despesa' AND cs.subgrupo_id IS NULL;"
+    )
+    despesa_sem_centro = sorted(
+        (r["categoria"] for r in cur.fetchall() if r["categoria"] not in CATEGORIAS_OCULTAS),
+        key=lambda c: chave_alfa(cat_pt(c)),
+    )
+
+    cur.execute("SELECT COUNT(*) AS n FROM cartao.transacao WHERE natureza IS NOT NULL;")
+    natureza_manual = cur.fetchone()["n"]
+
+    return {
+        "sem_natureza": sem_natureza,
+        "despesa_sem_centro": despesa_sem_centro,
+        "natureza_manual": natureza_manual,
+        "total": len(sem_natureza) + len(despesa_sem_centro),
+    }
+
+
+def aviso_pendencias_html(pend):
+    """Faixa de alerta mostrada no topo das telas de uso diario. So aparece quando
+    ha algo que realmente pode distorcer numero - nunca polui a tela a toa."""
+    if not pend["total"]:
+        return ""
+    partes = []
+    if pend["sem_natureza"]:
+        n = len(pend["sem_natureza"])
+        partes.append(f'<strong>{n}</strong> categoria{"s" if n > 1 else ""} sem natureza definida'
+                      f' (entra{"m" if n > 1 else ""} como despesa por padrão)')
+    if pend["despesa_sem_centro"]:
+        n = len(pend["despesa_sem_centro"])
+        partes.append(f'<strong>{n}</strong> categoria{"s" if n > 1 else ""} de despesa sem centro de custo')
+    return (
+        '<div style="background:var(--bad-soft);border:1px solid var(--bad);border-radius:10px;'
+        'padding:10px 14px;margin-bottom:14px;font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+        '<span>⚠</span><span>' + " · ".join(partes) + '</span>'
+        '<a href="/pendencias" style="margin-left:auto;color:var(--bad);font-weight:600">Revisar agora →</a>'
+        '</div>'
+    )
+
+
+@app.route("/pendencias", methods=["GET", "POST"])
+@requer("cadastros")
+def pendencias_view():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    aviso = None
+
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        if acao == "definir_natureza":
+            categoria = request.form.get("categoria")
+            natureza = request.form.get("natureza")
+            if categoria and natureza in NATUREZAS:
+                cur.execute(
+                    "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                    "ON CONFLICT (categoria) DO UPDATE SET natureza = EXCLUDED.natureza;",
+                    (categoria, natureza),
+                )
+                conn.commit()
+                aviso = f'Natureza de "{cat_pt(categoria)}" definida como {NATUREZAS[natureza]}.'
+        elif acao == "vincular_centro":
+            categoria = request.form.get("categoria")
+            subgrupo_id = request.form.get("subgrupo_id") or None
+            if categoria and subgrupo_id:
+                cur.execute(
+                    "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
+                    "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
+                    (categoria, subgrupo_id),
+                )
+                conn.commit()
+                aviso = f'"{cat_pt(categoria)}" vinculada ao centro de custo.'
+        elif acao == "ocultar":
+            categoria = request.form.get("categoria")
+            if categoria:
+                cur.execute(
+                    "INSERT INTO cartao.categoria_oculta (categoria) VALUES (%s) ON CONFLICT DO NOTHING;",
+                    (categoria,),
+                )
+                conn.commit()
+                recarregar_categorias_db()
+                aviso = f'"{cat_pt(categoria)}" ocultada — não aparece mais nas listas.'
+
+    pend = levantar_pendencias(cur)
+
+    cur.execute("SELECT id, nome FROM cartao.grupo_custo;")
+    grupos_db = sorted(cur.fetchall(), key=lambda g: chave_alfa(g["nome"]))
+    cur.execute("SELECT id, grupo_id, nome FROM cartao.subgrupo_custo;")
+    subgrupos_db = sorted(cur.fetchall(), key=lambda s: chave_alfa(s["nome"]))
+    cur.close()
+    conn.close()
+
+    subgrupos_por_grupo = {}
+    for s in subgrupos_db:
+        subgrupos_por_grupo.setdefault(s["grupo_id"], []).append(s)
+
+    def linha_sem_natureza(c):
+        opts = "".join(
+            f'<option value="{k}" {"selected" if k == NATUREZA_PADRAO else ""}>{v}</option>'
+            for k, v in NATUREZAS.items()
+        )
+        return (
+            f'<tr><td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{esc(c)}</div></td>'
+            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
+            f'<input type="hidden" name="acao" value="definir_natureza">'
+            f'<input type="hidden" name="categoria" value="{esc(c)}">'
+            f'<select name="natureza" style="padding:5px 7px;font-size:12px">{opts}</select>'
+            f'<button type="submit" class="ver-btn">Definir</button></form></td>'
+            f'<td><form method="post" onsubmit="return confirm(\'Ocultar {cat_pt(c)}? Ela some das listas.\')">'
+            f'<input type="hidden" name="acao" value="ocultar">'
+            f'<input type="hidden" name="categoria" value="{esc(c)}">'
+            f'<button type="submit" class="ver-btn">Não uso</button></form></td></tr>'
+        )
+
+    def linha_sem_centro(c):
+        opts = ['<option value="">escolha o subgrupo…</option>']
+        for g in grupos_db:
+            subs = subgrupos_por_grupo.get(g["id"], [])
+            if not subs:
+                continue
+            opts.append(f'<optgroup label="{esc(g["nome"])}">')
+            opts.extend(f'<option value="{s["id"]}">{esc(s["nome"])}</option>' for s in subs)
+            opts.append("</optgroup>")
+        return (
+            f'<tr><td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{esc(c)}</div></td>'
+            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
+            f'<input type="hidden" name="acao" value="vincular_centro">'
+            f'<input type="hidden" name="categoria" value="{esc(c)}">'
+            f'<select name="subgrupo_id" style="padding:5px 7px;font-size:12px">{"".join(opts)}</select>'
+            f'<button type="submit" class="ver-btn">Vincular</button></form></td></tr>'
+        )
+
+    bloco_natureza = (
+        f"""
+        <div class="cat-breakdown">
+          <h3>Categorias sem natureza definida ({len(pend["sem_natureza"])})</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+            Estas categorias chegaram pela sincronização e <strong>ninguém decidiu o que elas são</strong>.
+            O app assume <strong>despesa</strong> por padrão — se alguma for investimento, compra de bem ou
+            transferência, ela está inflando a despesa e distorcendo o resultado do período.
+            Se for uma categoria que você não usa, marque "Não uso" para escondê-la.
+          </div>
+          <table class="compacta ajustavel" data-tabela="pend-natureza">
+            <thead><tr><th>Categoria</th><th>Definir natureza</th><th></th></tr></thead>
+            <tbody>{"".join(linha_sem_natureza(c) for c in pend["sem_natureza"])}</tbody>
+          </table>
+        </div>"""
+        if pend["sem_natureza"] else
+        """
+        <div class="cat-breakdown">
+          <h3>Categorias sem natureza definida</h3>
+          <div style="font-size:13px;color:var(--good)">✓ Todas as categorias em uso têm natureza definida.</div>
+        </div>"""
+    )
+
+    bloco_centro = (
+        f"""
+        <div class="cat-breakdown">
+          <h3>Despesas fora do centro de custo ({len(pend["despesa_sem_centro"])})</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+            Estas categorias <strong>são despesa</strong> e entram no resultado normalmente, mas não estão
+            em nenhum centro de custo — então somem dos totais por grupo do DRE. Só aparecem aqui as de
+            despesa: vincular receita ou transferência a centro de custo não faria sentido, porque
+            centro de custo é análise de gasto.
+          </div>
+          <table class="compacta ajustavel" data-tabela="pend-centro">
+            <thead><tr><th>Categoria</th><th>Vincular a um subgrupo</th></tr></thead>
+            <tbody>{"".join(linha_sem_centro(c) for c in pend["despesa_sem_centro"])}</tbody>
+          </table>
+        </div>"""
+        if pend["despesa_sem_centro"] else
+        """
+        <div class="cat-breakdown">
+          <h3>Despesas fora do centro de custo</h3>
+          <div style="font-size:13px;color:var(--good)">✓ Toda categoria de despesa está em um centro de custo.</div>
+        </div>"""
+    )
+
+    bloco_manual = (
+        f"""
+        <div class="cat-breakdown">
+          <h3>Lançamentos com natureza manual ({pend["natureza_manual"]})</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.6">
+            Estes lançamentos têm uma natureza marcada no próprio lançamento, que ignora a natureza da
+            categoria. Funciona, mas fica escondido: quem olhar a categoria depois não entende por que
+            o número não bate. <strong>O caminho mais limpo é mover o lançamento para uma categoria que
+            já tenha a natureza certa</strong> — por exemplo, um PIX que foi a compra de um terreno vai
+            para "Imóveis / Terrenos" (natureza: aquisição de bem), e aí não importa se o meio foi PIX,
+            cartão ou dinheiro. Isso é informativo, não é um erro.
+          </div>
+        </div>"""
+        if pend["natureza_manual"] else ""
+    )
+
+    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
+    resumo = (
+        '<div style="font-size:13px;color:var(--good);margin-bottom:16px">'
+        '✓ Nenhuma pendência de classificação. Os números do DRE estão consistentes.</div>'
+        if not pend["total"] else
+        f'<div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">'
+        f'Esta tela existe para garantir a <strong>regra de ouro</strong>: os números precisam ser reais, '
+        f'sem despesa inflada por classificação errada. Resolva o que estiver aqui e o DRE fica confiável.</div>'
+    )
+
+    return f"""
+    <html><head><title>Pendências de classificação · Pé de Meia</title>{BASE_CSS}</head>
+    <body>
+      {topbar_html('Pendências de classificação', 'pendencias')}
+      <div class="wrap">
+        {aviso_html}
+        {resumo}
+        {bloco_natureza}
+        {bloco_centro}
+        {bloco_manual}
+      </div>
+    </body></html>
+    """
 
 
 @app.route("/categorias", methods=["GET", "POST"])

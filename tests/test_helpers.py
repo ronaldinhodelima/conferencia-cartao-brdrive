@@ -113,3 +113,40 @@ class TestPermissoesDoPerfil:
 
     def test_perfil_desconhecido_cai_em_leitura(self):
         assert set(app.permissoes_do_perfil("perfil-que-nao-existe")) == {"lancamentos_ver", "relatorios"}
+
+
+class TestAvisoPendencias:
+    """aviso_pendencias_html e a faixa de alerta mostrada no DRE - so pode aparecer
+    quando ha algo que realmente distorce numero, senao vira ruido na tela."""
+
+    def test_sem_pendencia_nao_mostra_nada(self):
+        pend = {"sem_natureza": [], "despesa_sem_centro": [], "natureza_manual": 0, "total": 0}
+        assert app.aviso_pendencias_html(pend) == ""
+
+    def test_natureza_manual_sozinha_nao_dispara_alerta(self):
+        # natureza manual e informativo (funciona, so nao e o caminho mais limpo) -
+        # nao pode disparar alerta vermelho como se fosse erro
+        pend = {"sem_natureza": [], "despesa_sem_centro": [], "natureza_manual": 12, "total": 0}
+        assert app.aviso_pendencias_html(pend) == ""
+
+    def test_categoria_sem_natureza_dispara_alerta(self):
+        pend = {"sem_natureza": ["Groceries"], "despesa_sem_centro": [], "natureza_manual": 0, "total": 1}
+        html = app.aviso_pendencias_html(pend)
+        assert "sem natureza definida" in html
+        assert "/pendencias" in html
+
+    def test_singular_e_plural(self):
+        um = app.aviso_pendencias_html(
+            {"sem_natureza": ["A"], "despesa_sem_centro": [], "natureza_manual": 0, "total": 1}
+        )
+        assert "1</strong> categoria sem natureza" in um
+        dois = app.aviso_pendencias_html(
+            {"sem_natureza": ["A", "B"], "despesa_sem_centro": [], "natureza_manual": 0, "total": 2}
+        )
+        assert "2</strong> categorias sem natureza" in dois
+
+    def test_mostra_os_dois_tipos_juntos(self):
+        pend = {"sem_natureza": ["A"], "despesa_sem_centro": ["B", "C"], "natureza_manual": 0, "total": 3}
+        html = app.aviso_pendencias_html(pend)
+        assert "sem natureza definida" in html
+        assert "sem centro de custo" in html

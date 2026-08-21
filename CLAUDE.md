@@ -179,6 +179,25 @@ BRDrive disponíveis no ambiente (vendas, propostas comerciais, etc.) são de ou
 
 Webhook do GitHub -> Coolify configurado em 20/08/2026. Todo push na `main` dispara build/deploy sozinho, sem precisar chamar a API do Coolify manualmente.
 
+## Classificação: natureza e centro de custo (decisão de 21/08/2026)
+
+Como garantir que os números do DRE são reais, sem despesa inflada:
+
+- **A natureza vem da categoria, não do lançamento.** Para classificar uma operação fora do
+  padrão (ex: um PIX de R$ 98 mil que foi a compra de um terreno), o caminho correto é **mover
+  o lançamento para uma categoria com a natureza certa** ("Imóveis / Terrenos" → `bem`). Assim
+  não importa se o meio foi PIX, cartão ou dinheiro — a categoria carrega a natureza.
+- O campo "natureza" no modal do lançamento (`transacao.natureza`) ainda existe e continua
+  sobrepondo a da categoria, mas é a via **antiga**: fica invisível para quem olha a categoria
+  depois. A tela `/pendencias` conta quantos lançamentos ainda usam isso.
+- **Categoria sem natureza é o problema mais grave**: o app assume `despesa` por padrão
+  (`NATUREZA_PADRAO`), então uma categoria nova inventada pelo Pluggy entra como despesa
+  *silenciosamente*. Não dá para bloquear o Pluggy de criar categorias — a solução é alertar
+  (`/pendencias` + faixa no DRE) para o usuário decidir: definir natureza, renomear ou ocultar.
+- **Centro de custo só se aplica a categorias de despesa.** Vincular receita ou transferência a
+  um centro de custo não faz sentido contábil — centro de custo é análise de gasto. Por isso
+  `/pendencias` só cobra vínculo das categorias com natureza `despesa`.
+
 ## Testes automatizados
 
 `tests/` cobre a "regra de ouro" do DRE (o que é despesa de verdade) e as funções auxiliares
