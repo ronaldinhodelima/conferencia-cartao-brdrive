@@ -1195,17 +1195,28 @@ BASE_CSS = BASE_CSS_HEAD + """
   table.compacta .obs-input { padding: 4px 6px; font-size: 11.5px; }
 
   /* ---------- colunas ajustaveis: redimensionar, reordenar, ordenar ---------- */
+  /* sem rolagem: a tabela ocupa 100% e redimensionar uma coluna tira/da espaco
+     da coluna vizinha, como planilha - nunca estoura a largura da tela. */
+  table.ajustavel { width: 100% !important; min-width: 0 !important; table-layout: fixed; }
   table.ajustavel th[data-col] {
     position: relative; cursor: grab; user-select: none;
+    font-size: 10px !important; font-weight: 600; line-height: 1.3; box-sizing: border-box;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   table.ajustavel th[data-col]:active { cursor: grabbing; }
   table.ajustavel th[data-col].arrastando { opacity: .4; }
   table.ajustavel th[data-col].arrastar-sobre { box-shadow: inset 2px 0 0 var(--accent); }
+  /* divisor entre colunas - sempre visivel, destaca no hover pra indicar que da pra arrastar */
+  table.ajustavel th[data-col]:not(:last-child) { border-right: 1px solid var(--line); }
   table.ajustavel th[data-col] .col-resize-handle {
-    position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize;
+    position: absolute; right: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize;
     z-index: 5;
   }
-  table.ajustavel th[data-col] .col-resize-handle:hover { background: var(--accent-soft); }
+  table.ajustavel th[data-col] .col-resize-handle::after {
+    content: ""; position: absolute; right: 4px; top: 15%; bottom: 15%; width: 2px;
+    background: transparent; border-radius: 2px;
+  }
+  table.ajustavel th[data-col] .col-resize-handle:hover::after { background: var(--accent); }
   table.ajustavel th[data-col].sort-asc::after { content: " ▲"; font-size: 9px; color: var(--accent); }
   table.ajustavel th[data-col].sort-desc::after { content: " ▼"; font-size: 9px; color: var(--accent); }
   table.compacta input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); }
@@ -1880,7 +1891,7 @@ def index():
     cor_resultado = "#1f8a53" if resultado_mes >= 0 else "#c23c34"
     colspan_total = 8 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th class="cel-dim" data-col="dim_{d["id"]}">{esc(d["nome"])}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
+    dim_headers = "".join(f'<th class="cel-dim" data-col="dim_{d["id"]}">{esc(d["nome"])}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -1950,14 +1961,12 @@ def index():
           <button type="button" class="ver-btn" onclick="redefinirColunas('lancamentos')"
                   title="Volta a ordem, largura e ordenação das colunas ao padrão">↺ Redefinir colunas</button>
         </div>
-        <div class="tabela-scroll">
         <table class="compacta ajustavel" id="tabela-lancamentos">
           <thead><tr>
             <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">Conf</th><th class="cel-status" data-col="status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
-        </div>
       </div>
 
       <div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
@@ -2305,30 +2314,60 @@ def index():
             estado.ordem.forEach(col => {{ if (mapaTh[col]) thead.appendChild(mapaTh[col]); }});
             reordenarLinhas();
           }}
-          // largura salva
-          if (estado.larguras) {{
-            Object.keys(estado.larguras).forEach(col => aplicarLargura(col, estado.larguras[col]));
-          }}
 
-          // redimensionar: alca na borda direita de cada th
+          // sem rolagem: a soma das larguras tem que bater exatamente com a largura
+          // da tabela (100% do container) - normaliza tanto a largura salva quanto a
+          // padrao proporcionalmente, senao o navegador estoura a tabela pra caber
+          // a soma das colunas (e volta a rolagem que queremos evitar).
+          function normalizarParaCaber(larguras) {{
+            const soma = Object.values(larguras).reduce((a, b) => a + b, 0);
+            const alvo = table.getBoundingClientRect().width;
+            if (soma <= 0 || alvo <= 0) return larguras;
+            const fator = alvo / soma;
+            const normalizado = {{}};
+            Object.keys(larguras).forEach(c => {{ normalizado[c] = Math.max(40, larguras[c] * fator); }});
+            return normalizado;
+          }}
+          const larguraBase = {{}};
+          thead.querySelectorAll('th[data-col]').forEach(th => {{
+            larguraBase[th.dataset.col] = (estado.larguras && estado.larguras[th.dataset.col]) || th.getBoundingClientRect().width;
+          }});
+          const larguraFinal = normalizarParaCaber(larguraBase);
+          Object.keys(larguraFinal).forEach(col => aplicarLargura(col, larguraFinal[col]));
+
+          // redimensionar: alca na borda direita de cada th - arrastar tira/da espaco
+          // da coluna vizinha (a soma nunca muda, entao a tabela nunca estoura)
           thead.querySelectorAll('th[data-col]').forEach(th => {{
             const alca = document.createElement('span');
             alca.className = 'col-resize-handle';
             alca.draggable = false;
             th.appendChild(alca);
+            // sem isso, o clique de soltar o mouse depois de redimensionar tambem
+            // dispara o listener de ordenar do th (o mousedown para de propagar,
+            // mas o evento "click" nativo dispara de qualquer jeito depois do mouseup)
+            alca.addEventListener('click', function (e) {{ e.stopPropagation(); }});
             alca.addEventListener('mousedown', function (e) {{
               e.preventDefault();
               e.stopPropagation();
+              const thVizinho = th.nextElementSibling;
+              if (!thVizinho || !thVizinho.dataset.col) return;
               const startX = e.clientX;
               const startWidth = th.getBoundingClientRect().width;
+              const startWidthVizinho = thVizinho.getBoundingClientRect().width;
               function mover(e2) {{
-                aplicarLargura(th.dataset.col, Math.max(40, startWidth + (e2.clientX - startX)));
+                const delta = e2.clientX - startX;
+                const novaAtual = startWidth + delta;
+                const novaVizinho = startWidthVizinho - delta;
+                if (novaAtual < 40 || novaVizinho < 40) return;
+                aplicarLargura(th.dataset.col, novaAtual);
+                aplicarLargura(thVizinho.dataset.col, novaVizinho);
               }}
               function soltar() {{
                 document.removeEventListener('mousemove', mover);
                 document.removeEventListener('mouseup', soltar);
                 estado.larguras = estado.larguras || {{}};
                 estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
+                estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
                 salvarEstado();
               }}
               document.addEventListener('mousemove', mover);
