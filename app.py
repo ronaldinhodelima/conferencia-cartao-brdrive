@@ -1963,7 +1963,7 @@ def index():
         </div>
         <table class="compacta ajustavel" id="tabela-lancamentos">
           <thead><tr>
-            <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">Conf</th><th class="cel-status" data-col="status"></th>
+            <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">OK</th><th class="cel-status" data-col="status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -2281,6 +2281,11 @@ def index():
         function ativarTabelaAjustavel(table, chave) {{
           const thead = table.querySelector('thead tr');
           const CHAVE = 'pedemeia_tabela_' + chave;
+          // trava pra impedir que soltar o mouse depois de redimensionar dispare ordenacao.
+          // a alca se move junto com a coluna enquanto arrasta, entao no momento de soltar
+          // o clique pode acabar caindo em outro elemento - por isso a trava e checada no
+          // handler do th (o que realmente importa), nao so via stopPropagation na alca.
+          let redimensionandoAgora = false;
 
           function estadoSalvo() {{
             try {{ return JSON.parse(localStorage.getItem(CHAVE) || '{{}}'); }} catch (e) {{ return {{}}; }}
@@ -2348,14 +2353,13 @@ def index():
             alca.draggable = false;
             th.appendChild(alca);
             // sem isso, o clique de soltar o mouse depois de redimensionar tambem
-            // dispara o listener de ordenar do th (o mousedown para de propagar,
-            // mas o evento "click" nativo dispara de qualquer jeito depois do mouseup)
             alca.addEventListener('click', function (e) {{ e.stopPropagation(); }});
             alca.addEventListener('mousedown', function (e) {{
               e.preventDefault();
               e.stopPropagation();
               const thVizinho = th.nextElementSibling;
               if (!thVizinho || !thVizinho.dataset.col) return;
+              redimensionandoAgora = true;
               const startX = e.clientX;
               const startWidth = th.getBoundingClientRect().width;
               const startWidthVizinho = thVizinho.getBoundingClientRect().width;
@@ -2374,6 +2378,11 @@ def index():
                 estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
                 estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
                 salvarEstado();
+                // a alca se move junto com a coluna durante o arraste, entao o "click"
+                // que o navegador gera ao soltar o mouse pode cair fora dela (no proprio
+                // th) - so o stopPropagation na alca nao e suficiente. A trava e resetada
+                // so depois desse click (se houver) ja ter passado pelo handler do th.
+                setTimeout(function () {{ redimensionandoAgora = false; }}, 0);
               }}
               document.addEventListener('mousemove', mover);
               document.addEventListener('mouseup', soltar);
@@ -2441,6 +2450,7 @@ def index():
           }}
           thead.querySelectorAll('th[data-col]').forEach(th => {{
             th.addEventListener('click', function (e) {{
+              if (redimensionandoAgora) return;
               if (e.target.classList.contains('col-resize-handle')) return;
               const col = th.dataset.col;
               const dir = (estado.sort && estado.sort.col === col && estado.sort.dir === 'asc') ? 'desc' : 'asc';
