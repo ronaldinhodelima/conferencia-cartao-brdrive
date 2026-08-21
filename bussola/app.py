@@ -534,19 +534,34 @@ def scheduler_loop():
         time.sleep(SYNC_INTERVAL_SECONDS)
 
 
+def autorizado():
+    """A chave e a mesma do /sync. Enquanto SYNC_SECRET nao estiver configurada,
+    nada e exigido (comportamento antigo, pra nao travar quem ainda nao configurou)."""
+    return not SYNC_SECRET or request.headers.get("X-Sync-Secret") == SYNC_SECRET
+
+
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "migration": STATE["migration"]})
+    # healthcheck do Coolify bate aqui sem chave nenhuma, entao nao pode dizer nada
+    # alem de "estou de pe" - o estado da migracao ja e detalhe interno demais.
+    return jsonify({"status": "ok"})
 
 
 @app.route("/")
 def root():
+    # Este endpoint expunha publicamente a lista de tabelas do banco (inclusive
+    # 'usuario') e o resumo do sync - quantas conexoes bancarias existem, quantas
+    # contas, quantos investimentos e transacoes. Nao vaza valor nem descricao,
+    # mas e reconhecimento de graca pra quem estiver varrendo a internet (e ha
+    # scanners batendo aqui todo dia). Agora so responde com a chave.
+    if not autorizado():
+        return jsonify({"status": "ok"})
     return jsonify({"migration": STATE, "sync": SYNC_STATE})
 
 
 @app.route("/sync", methods=["GET", "POST"])
 def sync_now():
-    if SYNC_SECRET and request.headers.get("X-Sync-Secret") != SYNC_SECRET:
+    if not autorizado():
         return jsonify({"ok": False, "erro": "nao autorizado"}), 401
     result = run_sync()
     return jsonify(result)
