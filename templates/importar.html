@@ -13,7 +13,9 @@
     <input type="file" id="arquivo" accept=".ofx,.qfx,.csv,.txt" required
            style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--surface)">
     <select id="origem" required style="padding:8px 10px">
-      {% for val, curto, completo in origem_opcoes %}
+      {# carregar_origens devolve (id, html_com_selo, label_completo, label_curto);
+         o <option> nao renderiza html, entao usa o label completo em texto #}
+      {% for val, _html, completo, _curto in origem_opcoes %}
         <option value="{{ val }}">{{ completo }}</option>
       {% endfor %}
     </select>

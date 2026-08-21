@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{# select de categoria, reaproveitado pelo form de criar e pelo de editar #}
+{% macro sel_categoria(selecionado=None) %}
+  <select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">
+    {% for c in categorias %}
+      <option value="{{ c.chave }}" {{ 'selected' if c.chave == selecionado }}>{{ c.nome }}</option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
+{# um seletor por dimensao; selecionados = {dimensao_id: valor_id} #}
+{% macro sel_dimensoes(selecionados={}) %}
+  {% for d in dimensoes %}
+    <div>
+      <label style="font-size:12px;color:#888;display:block">{{ d.nome }}</label>
+      <select name="dim_{{ d.id }}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">
+        <option value="">(nao definir)</option>
+        {% for v in valores_por_dim.get(d.id, []) %}
+          <option value="{{ v.id }}" {{ 'selected' if selecionados.get(d.id) == v.id }}>{{ v.nome }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  {% endfor %}
+{% endmacro %}
+
+{% block conteudo %}
+<div style="font-size:13px;color:#666;margin-bottom:16px">
+  Quando a descricao de um lancamento <strong>pendente</strong> (nao conferido) contiver o texto cadastrado aqui,
+  o app preenche sozinho a categoria e as dimensoes escolhidas, na proxima vez que voce abrir a tela principal.
+  Nunca mexe em lancamentos que voce ja marcou como conferidos.
+  Total de lancamentos ja classificados por regras: <strong>{{ total_aplicadas }}</strong>.
+</div>
+
+<div class="cat-breakdown">
+  <h3>Nova regra</h3>
+  <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="criar_regra">
+    <div>
+      <label style="font-size:12px;color:#888;display:block">Texto na descricao</label>
+      <input name="padrao" placeholder="Ex: BOCO GAS" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+    </div>
+    <div>
+      <label style="font-size:12px;color:#888;display:block">Categoria</label>
+      {{ sel_categoria() }}
+    </div>
+    {{ sel_dimensoes() }}
+    <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar regra</button>
+  </form>
+  {% if erro %}<p class="err">{{ erro }}</p>{% endif %}
+</div>
+
+<table>
+  <thead><tr><th>Texto procurado</th><th>Categoria</th><th>Dimensoes</th><th></th></tr></thead>
+  <tbody>
+    {% for r in regras %}
+      {% if r.id == editar_id %}
+        <tr><td colspan="4">
+          <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;padding:8px 0">
+            <input type="hidden" name="acao" value="editar_regra">
+            <input type="hidden" name="regra_id" value="{{ r.id }}">
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Texto na descricao</label>
+              <input name="padrao" value="{{ r.padrao }}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+            </div>
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Categoria</label>
+              {{ sel_categoria(r.categoria) }}
+            </div>
+            {{ sel_dimensoes(r.dims_selecionadas) }}
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
+            <a href="/regras" class="ver-btn" style="text-decoration:none">Cancelar</a>
+          </form>
+        </td></tr>
+      {% else %}
+        <tr>
+          <td><strong>"{{ r.padrao }}"</strong></td>
+          <td>{{ r.categoria_nome }}</td>
+          <td>{{ r.dims_txt }}</td>
+          <td style="white-space:nowrap">
+            <a href="/regras?editar={{ r.id }}" class="ver-btn" style="text-decoration:none">Editar</a>
+            <form method="post" style="display:inline" onsubmit="return confirm('Reaplicar essa regra aos lancamentos pendentes?')">
+              <input type="hidden" name="acao" value="reaplicar_regra">
+              <input type="hidden" name="regra_id" value="{{ r.id }}">
+              <button type="submit" class="ver-btn">Reaplicar</button>
+            </form>
+            <form method="post" style="display:inline" onsubmit="return confirm('Excluir esta regra?')">
+              <input type="hidden" name="acao" value="excluir_regra">
+              <input type="hidden" name="regra_id" value="{{ r.id }}">
+              <button type="submit" class="ver-btn">Excluir</button>
+            </form>
+          </td>
+        </tr>
+      {% endif %}
+    {% else %}
+      <tr><td colspan="4" style="text-align:center;color:#888;padding:16px">Nenhuma regra cadastrada ainda.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

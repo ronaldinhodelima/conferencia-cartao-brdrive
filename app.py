@@ -2192,24 +2192,7 @@ def regras_view():
     cur.close()
     conn.close()
 
-    def cat_options_regra(selecionado=None):
-        return "".join(
-            f'<option value="{esc(c)}" {"selected" if c == selecionado else ""}>{cat_pt(c)}</option>'
-            for c in todas_categorias
-        )
-
-    def dim_options_regra(dimensao_id, selecionado=None):
-        opts = ['<option value="">(nao definir)</option>']
-        for v in valores_por_dim.get(dimensao_id, []):
-            sel = "selected" if selecionado == v["id"] else ""
-            opts.append(f'<option value="{v["id"]}" {sel}>{esc(v["nome"])}</option>')
-        return "".join(opts)
-
-    dim_cols_novo = "".join(
-        f'<div><label style="font-size:12px;color:#888;display:block">{d["nome"]}</label>'
-        f'<select name="dim_{d["id"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{dim_options_regra(d["id"])}</select></div>'
-        for d in dimensoes
-    )
+    categorias = [{"chave": c, "nome": cat_pt_puro(c)} for c in todas_categorias]
 
     editar_id = request.args.get("editar")
     try:
@@ -2217,89 +2200,38 @@ def regras_view():
     except ValueError:
         editar_id = None
 
-    linhas = []
+    regras = []
     for r in regras_db:
+        selecionadas = dim_por_regra.get(r["id"], {})
         dims_txt = []
         for d in dimensoes:
-            vid = dim_por_regra.get(r["id"], {}).get(d["id"])
+            vid = selecionadas.get(d["id"])
             if vid:
-                nome_valor = next((v["nome"] for v in valores_por_dim.get(d["id"], []) if v["id"] == vid), "?")
+                nome_valor = next(
+                    (v["nome"] for v in valores_por_dim.get(d["id"], []) if v["id"] == vid), "?"
+                )
                 dims_txt.append(f'{d["nome"]}: {nome_valor}')
-        dims_html = ", ".join(dims_txt) or "-"
+        regras.append({
+            "id": r["id"],
+            "padrao": r["padrao"],
+            "categoria": r["categoria"],
+            "categoria_nome": cat_pt_puro(r["categoria"]),
+            "dims_txt": ", ".join(dims_txt) or "-",
+            "dims_selecionadas": selecionadas,
+        })
 
-        if editar_id == r["id"]:
-            dim_cols_edit = "".join(
-                f'<div><label style="font-size:12px;color:#888;display:block">{d["nome"]}</label>'
-                f'<select name="dim_{d["id"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
-                f'{dim_options_regra(d["id"], dim_por_regra.get(r["id"], {}).get(d["id"]))}</select></div>'
-                for d in dimensoes
-            )
-            linhas.append(
-                f'<tr><td colspan="4">'
-                f'<form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;padding:8px 0">'
-                f'<input type="hidden" name="acao" value="editar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
-                f'<div><label style="font-size:12px;color:#888;display:block">Texto na descricao</label>'
-                f'<input name="padrao" value="{esc(r["padrao"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px"></div>'
-                f'<div><label style="font-size:12px;color:#888;display:block">Categoria</label>'
-                f'<select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{cat_options_regra(r["categoria"])}</select></div>'
-                f'{dim_cols_edit}'
-                f'<button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>'
-                f'<a href="/regras" class="ver-btn" style="text-decoration:none">Cancelar</a>'
-                f'</form></td></tr>'
-            )
-        else:
-            linhas.append(
-                f'<tr><td><strong>"{r["padrao"]}"</strong></td><td>{cat_pt(r["categoria"])}</td><td>{dims_html}</td>'
-                f'<td style="white-space:nowrap">'
-                f'<a href="/regras?editar={r["id"]}" class="ver-btn" style="text-decoration:none">Editar</a> '
-                f'<form method="post" style="display:inline" onsubmit="return confirm(\'Reaplicar essa regra aos lancamentos pendentes?\')">'
-                f'<input type="hidden" name="acao" value="reaplicar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
-                f'<button type="submit" class="ver-btn">Reaplicar</button></form> '
-                f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir esta regra?\')">'
-                f'<input type="hidden" name="acao" value="excluir_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
-                f'<button type="submit" class="ver-btn">Excluir</button></form>'
-                f'</td></tr>'
-            )
-    linhas_html = "".join(linhas) or '<tr><td colspan="4" style="text-align:center;color:#888;padding:16px">Nenhuma regra cadastrada ainda.</td></tr>'
-
-    erro_html = f'<p class="err">{erro}</p>' if erro else ''
-
-    return f"""
-    <html><head><title>Regras Automaticas · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Regras Automáticas', 'regras')}
-      <div class="wrap">
-        <div style="font-size:13px;color:#666;margin-bottom:16px">
-          Quando a descricao de um lancamento <strong>pendente</strong> (nao conferido) contiver o texto cadastrado aqui,
-          o app preenche sozinho a categoria e as dimensoes escolhidas, na proxima vez que voce abrir a tela principal.
-          Nunca mexe em lancamentos que voce ja marcou como conferidos.
-          Total de lancamentos ja classificados por regras: <strong>{total_aplicadas}</strong>.
-        </div>
-        <div class="cat-breakdown">
-          <h3>Nova regra</h3>
-          <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="criar_regra">
-            <div>
-              <label style="font-size:12px;color:#888;display:block">Texto na descricao</label>
-              <input name="padrao" placeholder='Ex: BOCO GAS' style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
-            </div>
-            <div>
-              <label style="font-size:12px;color:#888;display:block">Categoria</label>
-              <select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{cat_options_regra()}</select>
-            </div>
-            {dim_cols_novo}
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar regra</button>
-          </form>
-          {erro_html}
-        </div>
-
-        <table>
-          <thead><tr><th>Texto procurado</th><th>Categoria</th><th>Dimensoes</th><th></th></tr></thead>
-          <tbody>{linhas_html}</tbody>
-        </table>
-      </div>
-    </body></html>
-    """
+    return render_template(
+        "regras.html",
+        titulo="Regras Automáticas",
+        topbar=topbar_html("Regras Automáticas", "regras"),
+        erro=erro,
+        regras=regras,
+        categorias=categorias,
+        dimensoes=dimensoes,
+        valores_por_dim=valores_por_dim,
+        total_aplicadas=total_aplicadas,
+        editar_id=editar_id,
+    )
 
 
 def _fmt_moeda(v):
