@@ -2202,140 +2202,64 @@ def dre():
 
     nao_classificadas = sorted(set(anual_por_cat) - categorias_mapeadas)
 
-    blocos = []
-    total_geral_anual = 0.0
+    # ---- centro de custo: total do ano por grupo > subgrupo ----
+    blocos_grupo = []
     for g in sorted(grupos.values(), key=lambda x: chave_alfa(x["nome"])):
-        g_anual = 0.0
-        subs_html = []
+        subs = []
         for s in sorted(g["subgrupos"].values(), key=lambda x: chave_alfa(x["nome"])):
             s_anual = sum(anual_por_cat.get(c, 0.0) for c in s["categorias"])
-            g_anual += s_anual
-            cats_pt = ", ".join(cat_pt(c) for c in s["categorias"]) or "sem categorias vinculadas"
-            subs_html.append(
-                f'<div style="padding:10px 0;border-top:1px solid #f2f2f2">'
-                f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
-                f'<strong style="font-size:14px">{s["nome"]}</strong>'
-                f'<span style="font-size:14px">{_fmt_moeda(s_anual)} no ano</span>'
-                f'</div>'
-                f'<div style="font-size:11px;color:#aaa;margin-top:2px">{cats_pt}</div>'
-                f'</div>'
-            )
-        total_geral_anual += g_anual
-        blocos.append(
-            f'<div class="cat-breakdown">'
-            f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
-            f'<h3 style="margin:0">{g["nome"]}</h3>'
-            f'<span style="font-size:18px;font-weight:600">{_fmt_moeda(g_anual)}</span>'
-            f'</div>'
-            f'{"".join(subs_html)}'
-            f'</div>'
-        )
+            subs.append({
+                "nome": s["nome"],
+                "total": s_anual,
+                "categorias": ", ".join(cat_pt_puro(c) for c in s["categorias"]) or "sem categorias vinculadas",
+            })
+        blocos_grupo.append({
+            "nome": g["nome"],
+            "total": sum(s["total"] for s in subs),
+            "subgrupos": subs,
+        })
 
-    if nao_classificadas:
-        linhas_nc = "".join(
-            f'<div class="cat-row"><span>{cat_pt(c)}</span><span>{_fmt_moeda(anual_por_cat[c])}</span></div>'
-            for c in nao_classificadas
-        )
-        blocos.append(
-            f'<div class="cat-breakdown">'
-            f'<h3>Nao classificadas</h3>'
-            f'<div style="font-size:12px;color:#888;margin-bottom:8px">Categorias sem centro de custo definido em <a href="/grupos">Centro de Custos</a>.</div>'
-            f'{linhas_nc}</div>'
-        )
+    blocos_dimensao = [{
+        "nome": pd["nome"],
+        "linhas": [{"nome": l["nome"], "total": float(l["total"] or 0)} for l in pd["linhas"]],
+    } for pd in por_dimensao]
 
-    blocos_dimensao = []
-    for pd in por_dimensao:
-        linhas_html = "".join(
-            f'<div class="cat-row"><span>{l["nome"]}</span><span>{_fmt_moeda(float(l["total"] or 0))}</span></div>'
-            for l in pd["linhas"]
-        ) or '<div class="cat-row"><span>Sem dados</span></div>'
-        blocos_dimensao.append(
-            f'<div class="cat-breakdown"><h3>Por {pd["nome"]}</h3>{linhas_html}</div>'
-        )
-
-    anos_opcoes = "".join(
-        f'<option value="{a}" {"selected" if str(a)==ano else ""}>{a}</option>'
-        for a in range(hoje.year - 3, hoje.year + 1)
-    )
-
-    # ---- tabela do DRE: um mes por linha, do mais recente para o mais antigo ----
+    # ---- DRE: um mes por linha, do mais recente para o mais antigo ----
     rec_ano = sum(m["receita"] for m in meses_dre.values())
     desp_ano = sum(m["despesa"] for m in meses_dre.values())
     inv_ano = sum(m["investimento"] + m["bem"] for m in meses_dre.values())
-    resultado_ano = rec_ano - desp_ano
-
-    def _cor(v):
-        return "#1f8a53" if v >= 0 else "#c23c34"
 
     linhas_dre = []
     for mes_key in sorted(meses_dre, reverse=True):
         m = meses_dre[mes_key]
         res = m["receita"] - m["despesa"]
-        inv = m["investimento"] + m["bem"]
-        margem = (res / m["receita"] * 100) if m["receita"] else 0
-        linhas_dre.append(
-            f'<tr>'
-            f'<td>{MESES_ABREV[int(mes_key[5:7]) - 1]}/{mes_key[2:4]}</td>'
-            f'<td class="valor" style="color:#1f8a53">{_fmt_moeda(m["receita"])}</td>'
-            f'<td class="valor" style="color:#c23c34">{_fmt_moeda(m["despesa"])}</td>'
-            f'<td class="valor" style="color:{_cor(res)};font-weight:600">{_fmt_moeda(res)}</td>'
-            f'<td class="valor" style="color:#5c5f66">{("%.0f%%" % margem) if m["receita"] else "-"}</td>'
-            f'<td class="valor" style="color:#5c5f66">{_fmt_moeda(inv) if inv else "-"}</td>'
-            f'</tr>'
-        )
-    corpo_dre = "".join(linhas_dre) or '<tr><td colspan="6" style="padding:18px;text-align:center;color:#888">Sem lançamentos neste ano.</td></tr>'
+        linhas_dre.append({
+            "rotulo": f'{MESES_ABREV[int(mes_key[5:7]) - 1]}/{mes_key[2:4]}',
+            "receita": m["receita"],
+            "despesa": m["despesa"],
+            "resultado": res,
+            "margem": (res / m["receita"] * 100) if m["receita"] else 0,
+            "investido": m["investimento"] + m["bem"],
+        })
 
-    return f"""
-    <html><head><title>DRE / Centro de Custos · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('DRE / Centro de Custos', 'dre')}
-      <div class="wrap">
-        {aviso_pend}
-        <div class="filters">
-          <div>
-            <label>Ano</label>
-            <select onchange="window.location='/dre?ano='+this.value">{anos_opcoes}</select>
-          </div>
-        </div>
-
-        <div class="cards">
-          <div class="card"><div class="label">Receitas do ano</div><div class="val" style="color:#1f8a53">{_fmt_moeda(rec_ano)}</div></div>
-          <div class="card"><div class="label">Despesas do ano</div><div class="val" style="color:#c23c34">{_fmt_moeda(desp_ano)}</div></div>
-          <div class="card"><div class="label">Resultado do ano</div><div class="val" style="color:{_cor(resultado_ano)}">{_fmt_moeda(resultado_ano)}</div></div>
-          <div class="card"><div class="label">Investido / bens</div><div class="val" style="color:#5c5f66">{_fmt_moeda(inv_ano)}</div></div>
-        </div>
-
-        <div class="cat-breakdown">
-          <h3>Resultado mês a mês</h3>
-          <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
-            <strong>Resultado = Receitas − Despesas.</strong> Investimentos, compra de bens (terreno, veículo),
-            pagamento de fatura e transferências entre contas próprias <strong>não são despesa</strong> —
-            não empobrecem, apenas mudam a forma do patrimônio. Por isso ficam de fora do resultado e
-            aparecem na última coluna. Já os juros e tarifas <strong>são despesa</strong>, porque o dinheiro sai e não volta.
-          </div>
-          <div class="tabela-scroll">
-          <table class="compacta ajustavel" data-tabela="dre-mensal">
-            <thead><tr>
-              <th>Mês</th>
-              <th style="text-align:right">Receitas</th>
-              <th style="text-align:right">Despesas</th>
-              <th style="text-align:right">Resultado</th>
-              <th style="text-align:right" title="Quanto sobrou de cada R$ 100 recebidos">Margem</th>
-              <th style="text-align:right" title="Aplicações financeiras e compra de bens no mês">Investido / bens</th>
-            </tr></thead>
-            <tbody>{corpo_dre}</tbody>
-          </table>
-          </div>
-        </div>
-
-        <div style="font-size:13px;color:var(--ink-soft);margin:22px 0 10px 0">
-          <strong>Despesas por centro de custo</strong> — abaixo, só o que é consumo de fato.
-        </div>
-        {"".join(blocos_dimensao)}
-        {"".join(blocos)}
-      </div>
-    </body></html>
-    """
+    return render_template(
+        "dre.html",
+        titulo="DRE / Centro de Custos",
+        topbar=topbar_html("DRE / Centro de Custos", "dre"),
+        aviso_pend=aviso_pend,
+        ano=ano,
+        anos=list(range(hoje.year - 3, hoje.year + 1)),
+        rec_ano=rec_ano,
+        desp_ano=desp_ano,
+        resultado_ano=rec_ano - desp_ano,
+        inv_ano=inv_ano,
+        linhas_dre=linhas_dre,
+        blocos_dimensao=blocos_dimensao,
+        grupos=blocos_grupo,
+        nao_classificadas=[
+            {"nome": cat_pt_puro(c), "total": anual_por_cat[c]} for c in nao_classificadas
+        ],
+    )
 
 
 @app.route("/grupos", methods=["GET", "POST"])
