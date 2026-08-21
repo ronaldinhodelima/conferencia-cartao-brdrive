@@ -2671,6 +2671,104 @@ def grupos_view():
     )
 
 
+def _montar_filtro_relatorio(dimensoes):
+    """Le os filtros da querystring (request.args) e monta where/params/group_expr reutilizaveis
+    tanto pela pagina quanto pelos endpoints de dados (AJAX)."""
+    categorias_sel = request.args.getlist("categoria")
+    cartoes_sel = request.args.getlist("cartao")
+    origens_sel = request.args.getlist("origem")
+    data_ini = request.args.get("data_ini") or ""
+    data_fim = request.args.get("data_fim") or ""
+    agrupar = request.args.get("agrupar") or "categoria"
+    dim_sel = {}
+    for d in dimensoes:
+        vals = request.args.getlist(f"dim_{d['id']}")
+        if vals:
+            dim_sel[d["id"]] = vals
+
+    # visao do relatorio: o que estamos medindo. Por padrao, despesas (consumo real).
+    # Investimentos, aquisicao de bens e transferencias NAO sao despesa - ver NATUREZAS.
+    visao = request.args.get("visao") or "despesa"
+    if visao not in ("despesa", "receita", "investimento", "tudo"):
+        visao = "despesa"
+
+    where = ["COALESCE(t.duplicada, false) = false"]
+    params = []
+    if visao == "despesa":
+        where.append(NATUREZA_SQL + " = 'despesa'")
+    elif visao == "receita":
+        where.append(NATUREZA_SQL + " = 'receita'")
+    elif visao == "investimento":
+        where.append(NATUREZA_SQL + " IN ('investimento', 'bem')")
+    else:  # tudo: mostra o fluxo de caixa completo, menos o que so troca de bolso
+        where.append(NATUREZA_SQL + " <> 'transferencia'")
+
+    if categorias_sel:
+        where.append("t.categoria IN %s")
+        params.append(tuple(categorias_sel))
+    if cartoes_sel:
+        where.append("t.numero_cartao_final IN %s")
+        params.append(tuple(cartoes_sel))
+    if origens_sel:
+        where.append("t.account_id IN %s")
+        params.append(tuple(origens_sel))
+    if data_ini:
+        where.append("t.data_transacao >= %s")
+        params.append(data_ini)
+    if data_fim:
+        where.append("t.data_transacao <= %s")
+        params.append(data_fim + " 23:59:59")
+    for dim_id, vals in dim_sel.items():
+        where.append(
+            "EXISTS (SELECT 1 FROM cartao.transacao_dimensao td WHERE td.transacao_id = t.transacao_id::text "
+            "AND td.dimensao_id = %s AND td.valor_id IN %s)"
+        )
+        params.append(dim_id)
+        params.append(tuple(int(v) for v in vals))
+    where_sql = " AND ".join(where)
+
+    join_extra = ""
+    if agrupar == "categoria":
+        group_expr = "t.categoria"
+    elif agrupar == "cartao":
+        group_expr = "t.numero_cartao_final"
+    elif agrupar == "origem":
+        group_expr = "t.account_id::text"
+    elif agrupar == "mes":
+        group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
+    elif agrupar.startswith("dim_"):
+        dim_id_grp = agrupar.split("_", 1)[1]
+        join_extra = (
+            f"LEFT JOIN cartao.transacao_dimensao tdg ON tdg.transacao_id = t.transacao_id::text "
+            f"AND tdg.dimensao_id = {int(dim_id_grp)} LEFT JOIN cartao.dimensao_valor dvg ON dvg.id = tdg.valor_id"
+        )
+        group_expr = "COALESCE(dvg.nome, '(nao definido)')"
+    else:
+        agrupar = "categoria"
+        group_expr = "t.categoria"
+
+    # valor somado conforme a visao: na visao de receita invertemos o sinal para
+    # que entrada apareca positiva (VAL_DESPESA e positivo quando o dinheiro sai)
+    soma_expr = f"-{VAL_DESPESA}" if visao == "receita" else VAL_DESPESA
+
+    return {
+        "categorias_sel": categorias_sel,
+        "cartoes_sel": cartoes_sel,
+        "origens_sel": origens_sel,
+        "data_ini": data_ini,
+        "data_fim": data_fim,
+        "agrupar": agrupar,
+        "visao": visao,
+        "dim_sel": dim_sel,
+        "where_sql": where_sql,
+        "params": params,
+        "join_extra": join_extra,
+        "join_natureza": JOIN_NATUREZA,
+        "group_expr": group_expr,
+        "soma_expr": soma_expr,
+    }
+
+
 @app.route("/relatorios")
 @requer("relatorios")
 def relatorios():
