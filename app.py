@@ -997,14 +997,17 @@ def migrate():
             conn.commit()
 
         if versao_atual < 3:
-            # Fechamento/vencimento da fatura passam a ser por cartao (antes o
-            # fechamento era uma constante unica no codigo, so funcionava com um
-            # cartao). Modelo misto: o Pluggy preenche fechamento_fatura e
-            # vencimento_fatura quando o banco manda; dia_fechamento/dia_vencimento
-            # sao a sobrescrita manual de /contas, usada quando o banco nao manda
-            # ou manda errado. Guardamos o DIA (1-31) no manual porque a fatura e
-            # recorrente - o dia serve pra qualquer mes.
+            # Fechamento/vencimento da fatura passam a ser por cartao - antes o
+            # fechamento era uma constante unica no codigo, o que so funcionava com
+            # um cartao (Unicred, Nubank Ronaldo e Nubank Andrea fecham em dias
+            # diferentes). As datas vem do Pluggy: vencimento_fatura ja existia,
+            # fechamento_fatura foi adicionado aqui.
             cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS fechamento_fatura DATE;")
+            # dia_fechamento/dia_vencimento foram uma tentativa de sobrescrita manual,
+            # DESCONTINUADA logo depois: a tela ficou confusa e o dado do banco e mais
+            # confiavel. Os ALTER continuam aqui so porque a migracao ja rodou em
+            # producao - reescrever migracao aplicada criaria divergencia de schema.
+            # As colunas ficam sem uso; nada le nem grava nelas.
             cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS dia_fechamento integer;")
             cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS dia_vencimento integer;")
             cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (3);")
@@ -1295,11 +1298,20 @@ BASE_CSS = BASE_CSS_HEAD + """
   .login-box h2 { font-size: 19px; letter-spacing: -0.01em; margin: 0 0 18px 0; }
   .login-box input { width: 100%; padding: 10px 12px; margin: 6px 0; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: 14px; }
   .login-box input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .login-box button, .filters button {
+  .login-box button {
     background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: var(--radius-sm);
     cursor: pointer; font-size: 14px; font-weight: 500; transition: opacity .15s;
   }
-  .login-box button:hover, .filters button:hover { opacity: .85; }
+  .login-box button:hover { opacity: .85; }
+  /* botoes da barra de filtros seguem o padrao claro dos cards/chips - antes essa
+     regra era escura e, por ter mais especificidade que .ver-btn/.chip-btn, pintava
+     de escuro ate os botoes que ja pediam o estilo claro (setas de mes, + Origem) */
+  .filters button {
+    background: var(--surface); color: var(--ink-soft); border: 1px solid var(--line);
+    border-radius: 20px; padding: 8px 14px; cursor: pointer; font-size: 13px;
+    font-family: inherit; white-space: nowrap; transition: all .15s;
+  }
+  .filters button:hover { border-color: var(--ink-faint); color: var(--ink); }
   .err { color: var(--bad); font-size: 13px; }
 
   .summary { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; }
@@ -1681,8 +1693,7 @@ def topbar_html(titulo, ativo=None):
               {f'<a href="/grupos" class="{cls("grupos")}">Centro de Custos</a>' if pode("cadastros") else ""}
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
               {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
-              {f'<a href="/cartoes" class="{cls("cartoes")}">Gerenciar cartões</a>' if pode("cadastros") else ""}
-              {f'<a href="/contas" class="{cls("contas")}">Gerenciar contas</a>' if pode("cadastros") else ""}
+              {f'<a href="/contas" class="{cls("contas")}">Configurações de Contas / Cartão</a>' if pode("cadastros") else ""}
               {f'<a href="/usuarios" class="{cls("usuarios")}">Usuários e permissões</a>' if pode("usuarios") else ""}
             </div>
           </div>''' if (pode("cadastros") or pode("usuarios")) else ""}
@@ -1977,18 +1988,6 @@ def index():
     )
     por_categoria = cur.fetchall()
 
-    # datas de fatura por cartao: cada banco fecha e vence em dia diferente, entao
-    # nao da pra ter um numero unico pro sistema todo. Vem do Pluggy por conta.
-    cur.execute(
-        "SELECT c.account_id, c.nome, c.numero_final, c.vencimento_fatura, c.fechamento_fatura, "
-        "c.dia_fechamento, c.dia_vencimento, p.connector_name, it.titular "
-        "FROM cartao.conta c "
-        "JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
-        "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
-        "WHERE c.tipo = 'CREDIT' ORDER BY c.nome;"
-    )
-    contas_credito = cur.fetchall()
-
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
     nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
 
@@ -2038,36 +2037,6 @@ def index():
         if c["tipo"] == "CREDIT" and final4:
             return f'{c["label"]} - {nome_cartao_curto(final4)}'
         return c["label"]
-
-    def card_fatura_html():
-        """Um card por cartao de credito com fechamento e vencimento. Datas em fonte
-        menor e sem destaque - sao referencia, nao numero de resultado."""
-        if not contas_credito:
-            return ""
-        linhas = []
-        for c in contas_credito:
-            banco = detectar_banco(c["nome"], c["connector_name"])
-            apelido = nomes_cartao.get(c["numero_final"]) if c["numero_final"] else None
-            titulo = apelido or f'{banco}{" · " + esc(c["titular"]) if c["titular"] else ""}'
-            # o dia cadastrado a mao em /contas manda; senao usa o que veio do banco
-            fech = c["dia_fechamento"] or (c["fechamento_fatura"].day if c["fechamento_fatura"] else None)
-            venc = c["dia_vencimento"] or (c["vencimento_fatura"].day if c["vencimento_fatura"] else None)
-            datas = (
-                f'fecha {fech} · vence {venc}' if fech and venc
-                else '<a href="/contas" style="color:var(--ink-faint)">definir datas</a>'
-            )
-            linhas.append(
-                f'<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:11.5px">'
-                f'<span style="color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{titulo}</span>'
-                f'<span style="color:var(--ink-faint);white-space:nowrap">{datas}</span>'
-                f'</div>'
-            )
-        return (
-            '<div class="card" style="flex:1 1 260px">'
-            '<div class="label" title="Fechamento e vencimento de cada cartão">Faturas por cartão</div>'
-            f'<div style="margin-top:4px">{"".join(linhas)}</div>'
-            '</div>'
-        )
 
     def cat_options(selected):
         return "".join(
@@ -2195,11 +2164,11 @@ def index():
           <div>
             <label>Mes</label>
             <div style="display:flex;align-items:center;gap:4px">
-              <button type="button" class="ver-btn" onclick="mudarMes(-1)" title="Mês anterior"
-                      style="padding:6px 10px;font-size:14px;line-height:1">‹</button>
+              <button type="button" onclick="mudarMes(-1)" title="Mês anterior"
+                      style="padding:6px 12px;font-size:15px;line-height:1">‹</button>
               <input type="month" id="mesInput" value="{mes}" onchange="aplicarFiltros()">
-              <button type="button" class="ver-btn" onclick="mudarMes(1)" title="Próximo mês"
-                      style="padding:6px 10px;font-size:14px;line-height:1">›</button>
+              <button type="button" onclick="mudarMes(1)" title="Próximo mês"
+                      style="padding:6px 12px;font-size:15px;line-height:1">›</button>
             </div>
           </div>
           <div>
@@ -2236,7 +2205,6 @@ def index():
           <div class="card"><div class="label" title="Despesas do mês">Despesas do mês</div><div class="val" style="color:#c23c34">R$ {gasto_real:,.2f}</div></div>
           <div class="card"><div class="label" title="Resultado do mês (receitas menos despesas)">Resultado do mês</div><div class="val" style="color:{cor_resultado}">R$ {resultado_mes:,.2f}</div></div>
           <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{conf} / {total}</div></div>
-          {card_fatura_html()}
         </div>
 
         <details class="cat-breakdown">
@@ -2708,101 +2676,12 @@ def update_transacao(transacao_id):
     return jsonify({"ok": True, "bloqueada": bloqueada, "faltando": faltando})
 
 
-@app.route("/cartoes", methods=["GET", "POST"])
+@app.route("/cartoes")
 @requer("cadastros")
 def cartoes():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    erro = None
-    if request.method == "POST":
-        acao = request.form.get("acao")
-        final4 = (request.form.get("final4") or "").strip()
-        prefixo = (request.form.get("prefixo") or "").strip()
-        final4_original = (request.form.get("final4_original") or "").strip()
-
-        if acao == "excluir" and final4:
-            cur.execute("DELETE FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
-            conn.commit()
-
-        elif acao == "salvar":
-            if not final4.isdigit() or len(final4) != 4:
-                erro = "Os 4 ultimos digitos devem ser exatamente 4 numeros."
-            elif not prefixo:
-                erro = "Informe o nome/prefixo do cartao."
-            elif final4_original and final4_original != final4:
-                # edicao trocando tambem o numero final do cartao
-                cur.execute("SELECT 1 FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
-                if cur.fetchone() and final4 != final4_original:
-                    erro = f"Ja existe um cartao cadastrado com final {final4}."
-                else:
-                    cur.execute(
-                        "UPDATE cartao.cartao_nome SET final4 = %s, prefixo = %s WHERE final4 = %s;",
-                        (final4, prefixo, final4_original),
-                    )
-                    conn.commit()
-            else:
-                cur.execute(
-                    "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s, %s) "
-                    "ON CONFLICT (final4) DO UPDATE SET prefixo = EXCLUDED.prefixo;",
-                    (final4, prefixo),
-                )
-                conn.commit()
-
-    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
-    cartoes_cadastrados = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    editar_final4 = request.args.get("editar", "")
-    editando = next((c for c in cartoes_cadastrados if c["final4"] == editar_final4), None)
-    form_final4 = editando["final4"] if editando else ""
-    form_prefixo = editando["prefixo"] if editando else ""
-    titulo_form = "Editar cartao" if editando else "Novo cartao"
-
-    linhas = "".join(
-        f'<tr><td>{esc(c["prefixo"])}</td><td>final {esc(c["final4"])}</td>'
-        f'<td style="white-space:nowrap">'
-        f'<a href="/cartoes?editar={c["final4"]}" class="ver-btn" style="text-decoration:none;margin-right:6px">Editar</a>'
-        f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir este cartao?\')">'
-        f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="final4" value="{esc(c["final4"])}">'
-        f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
-        for c in cartoes_cadastrados
-    ) or '<tr><td colspan="3" style="text-align:center;color:#888;padding:16px">Nenhum cartao cadastrado.</td></tr>'
-
-    erro_html = f'<p class="err">{erro}</p>' if erro else ''
-    cancelar_html = '<a href="/cartoes" style="margin-left:6px;font-size:13px">cancelar edicao</a>' if editando else ''
-
-    return f"""
-    <html><head><title>Gerenciar Cartoes · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Gerenciar Cartões', 'cartoes')}
-      <div class="wrap">
-        <div class="cat-breakdown">
-          <h3>{titulo_form}{cancelar_html}</h3>
-          <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="salvar">
-            <input type="hidden" name="final4_original" value="{esc(form_final4)}">
-            <div>
-              <label style="font-size:13px;color:#555;display:block">Ultimos 4 digitos</label>
-              <input name="final4" maxlength="4" placeholder="Ex: 9938" value="{esc(form_final4)}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
-            </div>
-            <div>
-              <label style="font-size:13px;color:#555;display:block">Nome / prefixo (ex: Andrea - digital)</label>
-              <input name="prefixo" placeholder="Ex: Andrea - digital" value="{esc(form_prefixo)}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
-            </div>
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
-          </form>
-          {erro_html}
-        </div>
-
-        <table>
-          <thead><tr><th>Nome / prefixo</th><th>Final do cartao</th><th></th></tr></thead>
-          <tbody>{linhas}</tbody>
-        </table>
-      </div>
-    </body></html>
-    """
+    # Fundido em /contas (Configuracoes de Contas / Cartao): o apelido do cartao
+    # descreve a origem do dinheiro, mesmo assunto do titular da conta.
+    return redirect("/contas")
 
 
 @app.route("/dimensoes", methods=["GET", "POST"])
@@ -4739,6 +4618,9 @@ def investimentos_view():
 @app.route("/contas", methods=["GET", "POST"])
 @requer("cadastros")
 def contas_view():
+    """Configuracoes de Contas / Cartao - centraliza tudo que descreve a origem do
+    dinheiro: de quem e a conexao bancaria, e o apelido de cada cartao (fisico,
+    virtual, adicional). As datas de fatura vem do Pluggy e sao so leitura."""
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     aviso = erro = None
@@ -4746,27 +4628,24 @@ def contas_view():
     if request.method == "POST":
         acao = request.form.get("acao") or "titular"
         try:
-            if acao == "fatura":
-                # dia do mes (1-31). Vazio limpa o campo - nem todo cartao precisa ter.
-                def dia_valido(v):
-                    v = (v or "").strip()
-                    if not v:
-                        return None
-                    try:
-                        n = int(v)
-                    except ValueError:
-                        return None
-                    return n if 1 <= n <= 31 else None
-
-                cur.execute(
-                    "UPDATE cartao.conta SET dia_fechamento = %s, dia_vencimento = %s WHERE account_id = %s;",
-                    (
-                        dia_valido(request.form.get("dia_fechamento")),
-                        dia_valido(request.form.get("dia_vencimento")),
-                        request.form.get("account_id"),
-                    ),
-                )
-                aviso = "Datas da fatura salvas."
+            if acao == "salvar_cartao":
+                final4 = (request.form.get("final4") or "").strip()
+                prefixo = (request.form.get("prefixo") or "").strip()
+                if not (final4.isdigit() and len(final4) == 4):
+                    erro = "Os 4 últimos dígitos devem ser exatamente 4 números."
+                elif not prefixo:
+                    # nome em branco = remover o apelido, volta a aparecer como "final NNNN"
+                    cur.execute("DELETE FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
+                    conn.commit()
+                    aviso = f"Nome do cartão final {esc(final4)} removido."
+                else:
+                    cur.execute(
+                        "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s,%s) "
+                        "ON CONFLICT (final4) DO UPDATE SET prefixo = EXCLUDED.prefixo;",
+                        (final4, prefixo),
+                    )
+                    conn.commit()
+                    aviso = f'Cartão final {esc(final4)} salvo como "{esc(prefixo)}".'
             else:
                 item_id = request.form.get("item_id")
                 titular = (request.form.get("titular") or "").strip()
@@ -4780,95 +4659,107 @@ def contas_view():
                         (item_id, titular),
                     )
                     aviso = f'Titular salvo: "{esc(titular)}".'
-            conn.commit()
+                conn.commit()
         except Exception as e:
             conn.rollback()
             erro = str(e)
 
     cur.execute(
-        "SELECT c.item_id, c.account_id, c.tipo, c.nome, c.numero_final, c.dia_fechamento, "
-        "c.dia_vencimento, c.fechamento_fatura, c.vencimento_fatura, p.connector_name, it.titular "
+        "SELECT c.item_id, c.account_id, c.tipo, c.nome, c.numero_final, "
+        "c.fechamento_fatura, c.vencimento_fatura, p.connector_name, it.titular "
         "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
         "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
         "ORDER BY p.connector_name, c.tipo;"
     )
     linhas = cur.fetchall()
-    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
-    nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
+
+    # quais cartoes (finais) pertencem a cada conta - vem dos proprios lancamentos,
+    # que e o unico lugar onde o cartao adicional aparece. A conta traz so o final
+    # do cartao principal; os adicionais so existem nas transacoes.
+    cur.execute(
+        "SELECT DISTINCT account_id::text AS account_id, numero_cartao_final "
+        "FROM cartao.transacao WHERE numero_cartao_final IS NOT NULL;"
+    )
+    finais_por_conta = {}
+    for r in cur.fetchall():
+        finais_por_conta.setdefault(r["account_id"], set()).add(r["numero_cartao_final"])
+
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome ORDER BY prefixo;")
+    cartoes_nome = cur.fetchall()
     cur.close()
     conn.close()
+
+    nomes_cartao = {c["final4"]: c["prefixo"] for c in cartoes_nome}
 
     conexoes = {}
     for r in linhas:
         item_id = str(r["item_id"])
         banco = detectar_banco(r["nome"], r["connector_name"])
-        info = conexoes.setdefault(item_id, {"banco": banco, "titular": r["titular"], "contas": [], "cartoes": []})
-        tipo_pt = {"CREDIT": "Cartão de crédito", "BANK": "Conta corrente", "MANUAL": "Dinheiro (manual)"}.get(r["tipo"], r["tipo"])
-        detalhe = tipo_pt
-        if r["numero_final"]:
-            detalhe += f" · final {r['numero_final']}"
-        info["contas"].append(detalhe)
+        info = conexoes.setdefault(
+            item_id, {"banco": banco, "titular": r["titular"], "contas": [], "credito": []}
+        )
+        tipo_pt = {"CREDIT": "Cartão de crédito", "BANK": "Conta corrente",
+                   "MANUAL": "Dinheiro (manual)"}.get(r["tipo"], r["tipo"])
+        info["contas"].append(tipo_pt)
         if r["tipo"] == "CREDIT":
-            info["cartoes"].append(r)
+            info["credito"].append(r)
+
+    # finais ja usados por alguma conta - o que sobra e cartao cadastrado a mao
+    usados = set()
+    for r in linhas:
+        if r["tipo"] == "CREDIT":
+            usados |= finais_por_conta.get(str(r["account_id"]), set())
+            if r["numero_final"]:
+                usados.add(r["numero_final"])
+    avulsos = [c for c in cartoes_nome if c["final4"] not in usados]
 
     sugestoes = ["Ronaldo", "Andrea", "Ronaldo e Andrea", "Compartilhado"]
     datalist_html = "".join(f'<option value="{s}">' for s in sugestoes)
 
-    def campo_dia(nome, valor, dia_do_banco):
-        """Campo de sobrescrita manual. Quando o banco informou o dia, ele vira o
-        placeholder - assim da pra ver de onde veio o numero sem precisar preencher."""
-        v = "" if valor is None else str(valor)
-        ph = f"banco: {dia_do_banco}" if dia_do_banco else "dia"
-        return (
-            f'<input name="{nome}" value="{v}" type="number" min="1" max="31" placeholder="{ph}" '
-            f'style="width:78px;padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:12px">'
-        )
-
-    def linha_cartao(c):
-        """Cada cartao de credito fecha e vence num dia diferente - por isso e por
-        cartao, nao por conexao nem uma constante do sistema. O Pluggy preenche
-        sozinho quando o banco manda; o campo aqui e so pra corrigir ou completar."""
-        apelido = nomes_cartao.get(c["numero_final"]) if c["numero_final"] else None
-        nome_exib = apelido or (f'final {c["numero_final"]}' if c["numero_final"] else esc(c["nome"] or "Cartão"))
-        dia_fech_banco = c["fechamento_fatura"].day if c["fechamento_fatura"] else None
-        dia_venc_banco = c["vencimento_fatura"].day if c["vencimento_fatura"] else None
-        # o que vale de fato: manual sobrescreve o banco
-        vale_fech = c["dia_fechamento"] or dia_fech_banco
-        vale_venc = c["dia_vencimento"] or dia_venc_banco
-        if vale_fech and vale_venc:
-            resumo = f'<span style="font-size:11.5px;color:var(--good)">✓ fecha {vale_fech} · vence {vale_venc}</span>'
-        else:
-            faltando = " e ".join(x for x in [
-                "fechamento" if not vale_fech else "",
-                "vencimento" if not vale_venc else "",
-            ] if x)
-            resumo = f'<span style="font-size:11.5px;color:var(--bad)">falta {faltando}</span>'
+    def form_cartao(final4, prefixo, placeholder="ex: Ronaldo - físico"):
         return (
             f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;'
-            f'padding:8px 0;border-top:1px solid var(--line-soft)">'
-            f'<input type="hidden" name="acao" value="fatura">'
-            f'<input type="hidden" name="account_id" value="{c["account_id"]}">'
-            f'<span style="font-size:12.5px;min-width:140px">{nome_exib}</span>'
-            f'<span style="font-size:12px;color:#888">fecha dia</span>'
-            f'{campo_dia("dia_fechamento", c["dia_fechamento"], dia_fech_banco)}'
-            f'<span style="font-size:12px;color:#888">vence dia</span>'
-            f'{campo_dia("dia_vencimento", c["dia_vencimento"], dia_venc_banco)}'
+            f'padding:7px 0;border-top:1px solid var(--line-soft)">'
+            f'<input type="hidden" name="acao" value="salvar_cartao">'
+            f'<input type="hidden" name="final4" value="{esc(final4)}">'
+            f'<span style="font-size:12px;color:var(--ink-faint);min-width:78px">final {esc(final4)}</span>'
+            f'<input name="prefixo" value="{esc(prefixo or "")}" placeholder="{placeholder}" '
+            f'style="padding:6px 9px;border:1px solid #ccc;border-radius:6px;width:230px;font-size:12.5px">'
             f'<button type="submit" class="ver-btn">Salvar</button>'
-            f'{resumo}'
             f'</form>'
         )
 
-    def linha(item_id, info):
-        selo = selo_banco_html(info["banco"])
-        contas_txt = ", ".join(info["contas"])
-        titular_atual = info["titular"] or ""
-        bloco_cartoes = (
-            '<div style="margin-top:10px">'
+    def bloco_conta_credito(c):
+        """Uma conta de credito e seus cartoes (o principal + os adicionais que
+        aparecem nos lancamentos). Fechamento/vencimento vem do banco, so leitura."""
+        finais = set(finais_por_conta.get(str(c["account_id"]), set()))
+        if c["numero_final"]:
+            finais.add(c["numero_final"])
+        fech = c["fechamento_fatura"].day if c["fechamento_fatura"] else None
+        venc = c["vencimento_fatura"].day if c["vencimento_fatura"] else None
+        if fech and venc:
+            fatura = f'fatura fecha dia {fech} · vence dia {venc}'
+        elif venc:
+            fatura = f'fatura vence dia {venc} · <span style="color:var(--ink-faint)">fechamento não informado pelo banco</span>'
+        else:
+            fatura = '<span style="color:var(--ink-faint)">datas da fatura ainda não vieram do banco — aparecem após a sincronização</span>'
+        cartoes_html = "".join(
+            form_cartao(f, nomes_cartao.get(f)) for f in sorted(finais)
+        ) or ('<div style="font-size:12px;color:var(--ink-faint);padding:7px 0">'
+              'Nenhum cartão identificado ainda nos lançamentos.</div>')
+        return (
+            '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">'
             '<div style="font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;'
-            'letter-spacing:.03em;margin-bottom:2px">Fatura</div>'
-            + "".join(linha_cartao(c) for c in info["cartoes"]) +
+            'letter-spacing:.03em">Cartão de crédito</div>'
+            f'<div style="font-size:12.5px;color:var(--ink-soft);margin:3px 0 4px">{fatura}</div>'
+            f'{cartoes_html}'
             '</div>'
-        ) if info["cartoes"] else ""
+        )
+
+    def bloco_conexao(item_id, info):
+        selo = selo_banco_html(info["banco"])
+        contas_txt = ", ".join(dict.fromkeys(info["contas"]))
+        titular_atual = info["titular"] or ""
         return f"""
         <div class="cat-breakdown" style="padding:16px 18px">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -4887,30 +4778,64 @@ def contas_view():
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
           </div>
-          {bloco_cartoes}
+          {"".join(bloco_conta_credito(c) for c in info["credito"])}
         </div>
         """
 
-    blocos = "".join(linha(item_id, info) for item_id, info in conexoes.items())
+    bloco_avulsos = ""
+    if avulsos:
+        bloco_avulsos = f"""
+        <div class="cat-breakdown">
+          <h3>Cartões sem conta identificada</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:8px">
+            Cartões nomeados que ainda não apareceram em nenhum lançamento — pode ser um cartão
+            novo, ou um final que mudou. Deixe o nome em branco e salve para remover.
+          </div>
+          {"".join(form_cartao(c["final4"], c["prefixo"]) for c in avulsos)}
+        </div>"""
+
+    blocos = "".join(bloco_conexao(item_id, info) for item_id, info in conexoes.items())
     aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
     erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
 
     return f"""
-    <html><head><title>Gerenciar contas · Pé de Meia</title>{BASE_CSS}</head>
+    <html><head><title>Configurações de Contas / Cartão · Pé de Meia</title>{BASE_CSS}</head>
     <body>
-      {topbar_html('Gerenciar contas', 'contas')}
+      {topbar_html('Configurações de Contas / Cartão', 'contas')}
       <div class="wrap">
         {aviso_html}{erro_html}
         <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">
-          Diga de quem é cada conta/conexão importada do banco. Isso aparece junto do nome do banco
-          nos lançamentos, relatórios e em qualquer lugar que mostre a origem do dinheiro.<br>
-          Para cartões de crédito, o <strong>dia de fechamento e vencimento da fatura</strong> vem
-          automaticamente do banco pela sincronização (aparece como sugestão no campo). Preencha à
-          mão só quando o banco não informar ou informar errado — o que você digitar tem prioridade.
-          Essas datas aparecem na tela de Lançamentos.
+          Tudo que descreve a <strong>origem do dinheiro</strong> fica aqui.
+          O <strong>titular</strong> diz de quem é cada conexão bancária e aparece junto do nome do
+          banco nos lançamentos e relatórios. O <strong>nome de cada cartão</strong> (físico, virtual,
+          adicional) identifica quem gastou dentro da mesma fatura — um cartão de crédito pode ter
+          vários, e cada um aparece pelos 4 últimos dígitos.
+          As <strong>datas de fatura vêm do banco</strong> pela sincronização e não são editáveis.
         </div>
         <datalist id="sugestoes-titular">{datalist_html}</datalist>
         {blocos}
+        {bloco_avulsos}
+        <div class="cat-breakdown">
+          <h3>Adicionar cartão manualmente</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+            Use quando um cartão ainda não apareceu em nenhum lançamento e você já quer deixar o
+            nome cadastrado.
+          </div>
+          <form method="post" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="salvar_cartao">
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Últimos 4 dígitos</label>
+              <input name="final4" maxlength="4" placeholder="Ex: 9938"
+                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:110px">
+            </div>
+            <div>
+              <label style="font-size:12px;color:#888;display:block">Nome do cartão</label>
+              <input name="prefixo" placeholder="Ex: Andrea - digital"
+                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:230px">
+            </div>
+            <button type="submit" class="ver-btn">Adicionar</button>
+          </form>
+        </div>
       </div>
     </body></html>
     """
