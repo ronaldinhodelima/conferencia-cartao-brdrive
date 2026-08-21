@@ -1,22 +1,5 @@
 """Healthcheck e sincronizacao com o Pluggy."""
-import os
-import csv
-import functools
-import hashlib
-import html
-import io
-import json
-import re
-import secrets
-import unicodedata
-import uuid
-import urllib.request
-import urllib.error
-from datetime import datetime, timedelta
-
-import psycopg2
-import psycopg2.extras
-from flask import Blueprint, request, redirect, session, jsonify, render_template
+from flask import Blueprint, jsonify
 
 from core import (
     disparar_sincronizacao,

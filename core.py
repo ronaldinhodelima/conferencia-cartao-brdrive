@@ -4,19 +4,16 @@ Nao importa nada de views/ nem de app.py. A dependencia corre sempre na mesma
 direcao - app.py -> views/ -> core.py - o que impede import circular.
 """
 import os
-import csv
 import functools
 import hashlib
 import html
-import io
 import json
-import re
 import secrets
 import unicodedata
 import uuid
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -441,24 +438,6 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
     """
 
 
-def proxima_ocorrencia_dia(dia):
-    """Retorna a proxima data (a partir de hoje, inclusive) em que o mes tem esse dia."""
-    hoje = datetime.now()
-    import calendar
-    ano, mes = hoje.year, hoje.month
-    ultimo_dia_mes = calendar.monthrange(ano, mes)[1]
-    dia_ajustado = min(dia, ultimo_dia_mes)
-    candidata = hoje.replace(day=dia_ajustado, hour=0, minute=0, second=0, microsecond=0)
-    if candidata.date() < hoje.date():
-        mes2 = mes + 1
-        ano2 = ano
-        if mes2 > 12:
-            mes2 = 1
-            ano2 += 1
-        ultimo_dia_mes2 = calendar.monthrange(ano2, mes2)[1]
-        dia_ajustado2 = min(dia, ultimo_dia_mes2)
-        candidata = candidata.replace(year=ano2, month=mes2, day=dia_ajustado2)
-    return candidata
 
 
 def esc(valor):

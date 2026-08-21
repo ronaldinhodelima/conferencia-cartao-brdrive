@@ -1,22 +1,9 @@
 """Relatorios, DRE e investimentos."""
-import os
-import csv
-import functools
-import hashlib
-import html
-import io
-import json
-import re
-import secrets
-import unicodedata
-import uuid
-import urllib.request
-import urllib.error
 from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
-from flask import Blueprint, request, redirect, session, jsonify, render_template
+from flask import Blueprint, request, jsonify, render_template
 
 from core import (
     CATEGORIAS_EXTRA,
@@ -30,11 +17,9 @@ from core import (
     aplicar_regras,
     aviso_pendencias_html,
     carregar_origens,
-    cat_pt,
     cat_pt_puro,
     chave_alfa,
     chip_filter_html,
-    esc,
     get_conn,
     levantar_pendencias,
     pode,

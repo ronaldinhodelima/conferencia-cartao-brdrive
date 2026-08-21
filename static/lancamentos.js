@@ -80,16 +80,28 @@ function atualizarChipLabels() {
   // chips pequenos ao lado mostrando o que esta selecionado
   const cont = document.getElementById('chipsSel');
   const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+  // curto/completo saem do DOM via textContent, que DECODIFICA o que o Jinja
+  // escapou - voltar isso cru para innerHTML reabriria o XSS. Ex: um valor de
+  // dimensao chamado "<img src=x onerror=...>" criado em /dimensoes.
   cont.innerHTML = marcados.map(cb => {
     const lbl = cb.closest('.chip-opt');
     const curto = lbl.dataset.curto || lbl.textContent.trim();
     const completo = lbl.getAttribute('data-tip') || curto;
-    return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
-           '<b onclick="desmarcarOrigem(\'' + cb.value + '\')">&times;</b></span>';
+    // o valor vai num data-attribute e o clique e tratado por delegacao. Nao da
+    // pra montar onclick="f('...')" aqui: o navegador decodifica a entidade ANTES
+    // do JS rodar, entao um valor com aspas escaparia da string mesmo escapado.
+    return '<span class="chip-tag" title="' + escHtml(completo) + '"><span>' + escHtml(curto) + '</span>' +
+           '<b class="chip-x" data-valor="' + escHtml(cb.value) + '">&times;</b></span>';
   }).join('');
 }
+document.addEventListener('click', function (e) {
+  const x = e.target.closest('.chip-x');
+  if (x) desmarcarOrigem(x.dataset.valor);
+});
 function desmarcarOrigem(valor) {
-  const cb = document.querySelector('.chipfilter input[type=checkbox][value="' + valor + '"]');
+  // comparacao em JS em vez de seletor CSS: valor com aspas quebraria o seletor
+  const cb = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]'))
+                  .find(c => c.value === valor);
   if (cb) { cb.checked = false; aplicarFiltros(); }
 }
 

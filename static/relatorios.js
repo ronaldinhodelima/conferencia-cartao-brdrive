@@ -76,17 +76,28 @@ function atualizarChipLabels() {
   const cont = document.getElementById('chipsSel');
   if (cont) {
     const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+    // curto/completo saem do DOM via textContent, que DECODIFICA o que o Jinja
+    // escapou - voltar isso cru para innerHTML reabriria o XSS. Ex: um valor de
+    // dimensao chamado "<img src=x onerror=...>" criado em /dimensoes.
     cont.innerHTML = marcados.map(cb => {
       const lbl = cb.closest('.chip-opt');
       const curto = lbl.dataset.curto || lbl.textContent.trim();
       const completo = lbl.getAttribute('data-tip') || curto;
-      return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
-             '<b onclick="desmarcarFiltro(\'' + cb.name + '\', \'' + cb.value + '\')">&times;</b></span>';
+      // nome/valor vao em data-attribute e o clique e tratado por delegacao - ver
+      // a nota equivalente em lancamentos.js
+      return '<span class="chip-tag" title="' + escHtml(completo) + '"><span>' + escHtml(curto) + '</span>' +
+             '<b class="chip-x" data-nome="' + escHtml(cb.name) + '" data-valor="' + escHtml(cb.value) + '">&times;</b></span>';
     }).join('');
   }
 }
+document.addEventListener('click', function (e) {
+  const x = e.target.closest('.chip-x');
+  if (x) desmarcarFiltro(x.dataset.nome, x.dataset.valor);
+});
 function desmarcarFiltro(nome, valor) {
-  const cb = document.querySelector('.chipfilter input[name="' + nome + '"][value="' + valor + '"]');
+  // comparacao em JS em vez de seletor CSS: valor com aspas quebraria o seletor
+  const cb = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]'))
+                  .find(c => c.name === nome && c.value === valor);
   if (cb) { cb.checked = false; aplicarFiltros(); }
 }
 function coletarQuery() {
