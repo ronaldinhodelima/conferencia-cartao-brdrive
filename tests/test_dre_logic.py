@@ -15,17 +15,18 @@ Nao da pra rodar SQL sem banco, entao aqui testamos:
      abaixo), que espelha exatamente a logica SQL - se a SQL mudar, essa
      funcao (e os testes) tem que mudar junto.
 """
-import app
+import app  # noqa: F401
+import core
 
 
 def natureza_efetiva(natureza_transacao, natureza_categoria, valor_despesa):
-    """Espelho em Python de app.NATUREZA_SQL. Mantenha em sincronia com a SQL.
+    """Espelho em Python de core.NATUREZA_SQL. Mantenha em sincronia com a SQL.
 
     natureza_transacao: app.natureza do lancamento (pode ser None)
     natureza_categoria: app.categoria_natureza.natureza da categoria (pode ser None)
     valor_despesa: o valor no sentido de VAL_DESPESA (positivo = dinheiro saiu)
     """
-    base = natureza_transacao or natureza_categoria or app.NATUREZA_PADRAO
+    base = natureza_transacao or natureza_categoria or core.NATUREZA_PADRAO
     if base == "fluxo":
         return "despesa" if valor_despesa > 0 else "receita"
     return base
@@ -35,21 +36,21 @@ class TestRegraDeOuro:
     """Cada caso aqui e uma frase literal da regra de ouro do CLAUDE.md."""
 
     def test_investimento_nao_e_despesa(self):
-        assert "investimento" in app.NATUREZAS_NEUTRAS
-        assert app.SEED_NATUREZAS["Investments"] == "investimento"
-        assert app.SEED_NATUREZAS["Automatic investment"] == "investimento"
-        assert app.SEED_NATUREZAS["Pension"] == "investimento"
+        assert "investimento" in core.NATUREZAS_NEUTRAS
+        assert core.SEED_NATUREZAS["Investments"] == "investimento"
+        assert core.SEED_NATUREZAS["Automatic investment"] == "investimento"
+        assert core.SEED_NATUREZAS["Pension"] == "investimento"
 
     def test_compra_de_bem_nao_e_despesa(self):
-        assert "bem" in app.NATUREZAS_NEUTRAS
-        assert app.SEED_NATUREZAS["Imóveis / Terrenos"] == "bem"
-        assert app.SEED_NATUREZAS["Veículos / Bens"] == "bem"
+        assert "bem" in core.NATUREZAS_NEUTRAS
+        assert core.SEED_NATUREZAS["Imóveis / Terrenos"] == "bem"
+        assert core.SEED_NATUREZAS["Veículos / Bens"] == "bem"
 
     def test_pagamento_de_fatura_nao_e_despesa(self):
         # a despesa real ja foi contada na compra - pagar a fatura so move
         # dinheiro da conta para o cartao.
-        assert app.SEED_NATUREZAS["Credit card payment"] == "transferencia"
-        assert "transferencia" in app.NATUREZAS_NEUTRAS
+        assert core.SEED_NATUREZAS["Credit card payment"] == "transferencia"
+        assert "transferencia" in core.NATUREZAS_NEUTRAS
 
     def test_transferencia_entre_contas_proprias_nao_e_despesa(self):
         for categoria in (
@@ -58,47 +59,47 @@ class TestRegraDeOuro:
             "Same person transfer - PIX",
             "Same person transfer - TED",
         ):
-            assert app.SEED_NATUREZAS[categoria] == "transferencia"
+            assert core.SEED_NATUREZAS[categoria] == "transferencia"
 
     def test_juros_e_tarifas_sao_despesa_de_verdade(self):
         # dinheiro sai e nao volta - isso e despesa real, diferente de
         # investimento/bem/transferencia.
-        assert app.SEED_NATUREZAS["Interests charged"] == "despesa"
-        assert app.SEED_NATUREZAS["Credit card fees"] == "despesa"
-        assert app.SEED_NATUREZAS["Tax on financial operations"] == "despesa"
+        assert core.SEED_NATUREZAS["Interests charged"] == "despesa"
+        assert core.SEED_NATUREZAS["Credit card fees"] == "despesa"
+        assert core.SEED_NATUREZAS["Tax on financial operations"] == "despesa"
 
     def test_receitas_sao_receita(self):
         for categoria in ("Income", "Salary", "Government aid", "Interest income", "Dividends"):
-            assert app.SEED_NATUREZAS[categoria] == "receita"
+            assert core.SEED_NATUREZAS[categoria] == "receita"
 
     def test_pix_ted_doc_dependem_da_direcao(self):
         # PIX/TED/dinheiro: o que entra e receita, o que sai e despesa -
         # nao da pra saber sem olhar a direcao de cada lancamento.
         for categoria in ("Transfer - PIX", "Transfer - TED", "Transfer - DOC", "Transfer - Cash"):
-            assert app.SEED_NATUREZAS[categoria] == "fluxo"
+            assert core.SEED_NATUREZAS[categoria] == "fluxo"
 
     def test_natureza_padrao_e_despesa(self):
         # categoria sem natureza definida (categoria nova, ainda nao
         # classificada) tem que cair em despesa por seguranca - nunca some
         # do resultado por omissao.
-        assert app.NATUREZA_PADRAO == "despesa"
+        assert core.NATUREZA_PADRAO == "despesa"
 
     def test_todo_valor_de_seed_naturezas_e_uma_natureza_valida(self):
         # se alguem digitar errado uma natureza em SEED_NATUREZAS (typo),
         # isso pega antes de virar um bug silencioso em producao.
-        for categoria, natureza in app.SEED_NATUREZAS.items():
-            assert natureza in app.NATUREZAS, f"{categoria!r} aponta pra natureza invalida {natureza!r}"
+        for categoria, natureza in core.SEED_NATUREZAS.items():
+            assert natureza in core.NATUREZAS, f"{categoria!r} aponta pra natureza invalida {natureza!r}"
 
     def test_categorias_neutras_padrao_deriva_certo_do_seed(self):
-        esperado = {c for c, n in app.SEED_NATUREZAS.items() if n in app.NATUREZAS_NEUTRAS}
-        assert app.CATEGORIAS_NEUTRAS_PADRAO == esperado
+        esperado = {c for c, n in core.SEED_NATUREZAS.items() if n in core.NATUREZAS_NEUTRAS}
+        assert core.CATEGORIAS_NEUTRAS_PADRAO == esperado
 
     def test_naturezas_neutras_sao_subconjunto_de_naturezas(self):
-        assert set(app.NATUREZAS_NEUTRAS) <= set(app.NATUREZAS)
+        assert set(core.NATUREZAS_NEUTRAS) <= set(core.NATUREZAS)
         # despesa e receita nunca podem ser "neutras" (fora do resultado) -
         # isso quebraria o proprio conceito de resultado.
-        assert "despesa" not in app.NATUREZAS_NEUTRAS
-        assert "receita" not in app.NATUREZAS_NEUTRAS
+        assert "despesa" not in core.NATUREZAS_NEUTRAS
+        assert "receita" not in core.NATUREZAS_NEUTRAS
 
 
 class TestNaturezaEfetiva:
@@ -114,7 +115,7 @@ class TestNaturezaEfetiva:
         assert natureza_efetiva(None, "investimento", 500) == "investimento"
 
     def test_sem_nenhuma_natureza_definida_usa_o_padrao(self):
-        assert natureza_efetiva(None, None, 100) == app.NATUREZA_PADRAO
+        assert natureza_efetiva(None, None, 100) == core.NATUREZA_PADRAO
 
     def test_fluxo_com_dinheiro_saindo_e_despesa(self):
         assert natureza_efetiva(None, "fluxo", 150.0) == "despesa"
@@ -133,5 +134,5 @@ class TestValDespesaSinal:
     a forma esperada (o calculo em si so roda dentro do Postgres)."""
 
     def test_val_despesa_inverte_sinal_fora_do_credito(self):
-        assert "CREDIT" in app.VAL_DESPESA
-        assert "ELSE -COALESCE" in app.VAL_DESPESA
+        assert "CREDIT" in core.VAL_DESPESA
+        assert "ELSE -COALESCE" in core.VAL_DESPESA

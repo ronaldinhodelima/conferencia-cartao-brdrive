@@ -8,7 +8,9 @@ formato usado aqui tem que espelhar o que a view realmente entrega.
 """
 import pytest
 
-import app
+import app  # noqa: F401  (cria o Flask app e registra os blueprints)
+import core
+from flask import render_template
 
 
 @pytest.fixture
@@ -19,7 +21,7 @@ def ctx():
 
 class TestInvestimentos:
     def test_estado_nao_sincronizado(self, ctx):
-        html = app.render_template(
+        html = render_template(
             "investimentos.html", titulo="Investimentos", topbar="", sincronizado=False
         )
         assert "Ainda não sincronizado" in html
@@ -31,7 +33,7 @@ class TestInvestimentos:
             "bruto": 110.0, "rend": 10.0, "pct": 10.0, "impostos": 1.5,
             "saldo": 108.5, "vencimento": "-",
         }]
-        html = app.render_template(
+        html = render_template(
             "investimentos.html", titulo="Investimentos", topbar="", sincronizado=True,
             ativos=ativos, encerrados=0, saldo_total=108.5, aplicado_total=100.0,
             rendimento_bruto=10.0, rend_pct=10.0, ir_total=1.5, historico=[],
@@ -53,7 +55,7 @@ class TestRegras:
             "id": 1, "padrao": "<script>alert(1)</script>", "categoria": "Fuel",
             "categoria_nome": "Combustível", "dims_txt": "-", "dims_selecionadas": {},
         }
-        html = app.render_template("regras.html", **{**self.BASE, "regras": [regra]})
+        html = render_template("regras.html", **{**self.BASE, "regras": [regra]})
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
 
@@ -64,12 +66,12 @@ class TestRegras:
             {"id": 2, "padrao": "B", "categoria": "Fuel", "categoria_nome": "Combustível",
              "dims_txt": "-", "dims_selecionadas": {}},
         ]
-        html = app.render_template("regras.html", **{**self.BASE, "regras": regras, "editar_id": 1})
+        html = render_template("regras.html", **{**self.BASE, "regras": regras, "editar_id": 1})
         assert html.count('value="editar_regra"') == 1
         assert '<option value="10" selected>' in html
 
     def test_sem_regras_mostra_aviso(self, ctx):
-        html = app.render_template("regras.html", **self.BASE)
+        html = render_template("regras.html", **self.BASE)
         assert "Nenhuma regra cadastrada ainda." in html
 
 
@@ -98,13 +100,13 @@ class TestIndex:
             hoje_iso="2026-08-21", origem_filtro_html="", pode_editar=True,
             pode_conferir=True, pode_manual=True,
             categorias=[{"chave": "Fuel", "nome": "Combustível"}],
-            dimensoes=self.DIMS, valores_por_dim=self.VALS, naturezas=app.NATUREZAS,
+            dimensoes=self.DIMS, valores_por_dim=self.VALS, naturezas=core.NATUREZAS,
             linhas=ctx_linhas, por_categoria=[], receita_mes=0.0, gasto_real=0.0,
             resultado_mes=0.0, conf=0, total=0,
             detalhes_json="{}", config_json="{}",
         )
         base.update(kw)
-        return app.render_template("index.html", **base)
+        return render_template("index.html", **base)
 
     def test_descricao_e_escapada(self, ctx):
         # descricao vem do banco (Pluggy ou lancamento manual digitado)
