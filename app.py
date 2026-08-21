@@ -1396,7 +1396,7 @@ def topbar_html(titulo, ativo=None):
             <button type="button" class="dropbtn" onclick="menuToggle(event, this)">Configurações ▾</button>
             <div class="dropdown-content">
               {f'<a href="/categorias" class="{cls("categorias")}">Gerenciar categorias</a>' if pode("cadastros") else ""}
-              {f'<a href="/grupos" class="{cls("grupos")}">Gerenciar grupos</a>' if pode("cadastros") else ""}
+              {f'<a href="/grupos" class="{cls("grupos")}">Centro de Custos</a>' if pode("cadastros") else ""}
               {f'<a href="/dimensoes" class="{cls("dimensoes")}">Gerenciar dimensões</a>' if pode("cadastros") else ""}
               {f'<a href="/regras" class="{cls("regras")}">Regras automáticas</a>' if pode("cadastros") else ""}
               {f'<a href="/cartoes" class="{cls("cartoes")}">Gerenciar cartões</a>' if pode("cadastros") else ""}
@@ -2979,7 +2979,7 @@ def dre():
         blocos.append(
             f'<div class="cat-breakdown">'
             f'<h3>Nao classificadas</h3>'
-            f'<div style="font-size:12px;color:#888;margin-bottom:8px">Categorias sem grupo/subgrupo definido em <a href="/grupos">Gerenciar grupos</a>.</div>'
+            f'<div style="font-size:12px;color:#888;margin-bottom:8px">Categorias sem centro de custo definido em <a href="/grupos">Centro de Custos</a>.</div>'
             f'{linhas_nc}</div>'
         )
 
@@ -3133,132 +3133,197 @@ def grupos_view():
     for s in subgrupos_db:
         subgrupos_por_grupo.setdefault(s["grupo_id"], []).append(s)
 
+    todas_categorias = sorted(
+        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_NEUTRAS_PADRAO - CATEGORIAS_OCULTAS,
+        key=lambda c: chave_alfa(cat_pt(c)),
+    )
+    categorias_por_subgrupo = {}
+    for c in todas_categorias:
+        sid = mapa_categoria.get(c)
+        if sid:
+            categorias_por_subgrupo.setdefault(sid, []).append(c)
+    categorias_sem_vinculo = [c for c in todas_categorias if not mapa_categoria.get(c)]
+
     def input_num(nome, valor):
         v = "" if valor is None else f"{float(valor):g}"
-        return f'<input name="{nome}" value="{v}" placeholder="opcional" style="width:110px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
+        return f'<input name="{nome}" value="{v}" placeholder="opcional" style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
 
-    grupos_html = []
+    def hidden_num(nome, valor):
+        v = "" if valor is None else f"{float(valor):g}"
+        return f'<input type="hidden" name="{nome}" value="{v}">'
+
+    def chip_categoria(c):
+        """Categoria ja vinculada a este subgrupo - clicar no x desvincula (some para 'sem centro de custo')."""
+        return (
+            f'<form method="post" style="display:inline-flex;align-items:center;gap:3px;background:var(--bg);'
+            f'border:1px solid var(--line);border-radius:999px;padding:3px 3px 3px 10px;font-size:12px;margin:2px">'
+            f'<input type="hidden" name="acao" value="mapear_categoria">'
+            f'<input type="hidden" name="categoria" value="{esc(c)}">'
+            f'<input type="hidden" name="subgrupo_id" value="">'
+            f'{cat_pt(c)}'
+            f'<button type="submit" title="Desvincular" style="border:none;background:none;cursor:pointer;'
+            f'color:var(--ink-faint);font-weight:700;padding:2px 6px;font-size:13px">×</button>'
+            f'</form>'
+        )
+
+    def select_adicionar_categoria(subgrupo_id):
+        """Dropdown para vincular mais uma categoria a este subgrupo (move de onde estiver, se estiver em outro)."""
+        opts = ['<option value="">+ vincular categoria…</option>']
+        for c in todas_categorias:
+            if mapa_categoria.get(c) == subgrupo_id:
+                continue
+            opts.append(f'<option value="{esc(c)}">{cat_pt(c)}</option>')
+        return (
+            f'<form method="post" style="display:inline-block">'
+            f'<input type="hidden" name="acao" value="mapear_categoria">'
+            f'<input type="hidden" name="subgrupo_id" value="{subgrupo_id}">'
+            f'<select name="categoria" onchange="this.form.submit()" '
+            f'style="padding:4px 6px;border:1px solid #ccc;border-radius:6px;font-size:12px;color:var(--ink-faint)">'
+            f'{"".join(opts)}</select></form>'
+        )
+
+    linhas_html = []
     for g in grupos_db:
         subs = subgrupos_por_grupo.get(g["id"], [])
-        subs_rows = "".join(
-            f'<tr>'
-            f'<td style="padding-left:24px">'
-            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-            f'<input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">'
-            f'<input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
-            f'{input_num("teto_mensal", s["teto_mensal"])}{input_num("teto_anual", s["teto_anual"])}'
-            f'<button type="submit" class="ver-btn">Salvar</button>'
-            f'</form></td>'
-            f'<td><form method="post" onsubmit="return confirm(\'Excluir subgrupo?\')">'
-            f'<input type="hidden" name="acao" value="excluir_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">'
-            f'<button type="submit" class="ver-btn">Excluir</button></form></td>'
-            f'</tr>'
-            for s in subs
-        )
-        grupos_html.append(f"""
-        <details class="cat-breakdown lembrar-aberto" id="grupo-{g["id"]}" style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
-            {g["nome"]} <span style="color:#888;font-weight:400;font-size:12px">({len(subs)} subgrupo{'s' if len(subs)!=1 else ''})</span>
-          </summary>
-          <div style="padding:0 18px 18px 18px">
+        linhas_html.append(f"""
+        <tr style="background:var(--bg)">
+          <td colspan="4" style="padding-top:16px">
             <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
               <input name="nome" value="{esc(g["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
               <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
               <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
-              <button type="submit" class="ver-btn">Salvar grupo</button>
+              <button type="submit" class="ver-btn">Salvar</button>
             </form>
-            <form method="post" style="display:inline" onsubmit="return confirm('Excluir grupo e seus subgrupos?')">
+          </td>
+          <td style="padding-top:16px">
+            <form method="post" onsubmit="return confirm('Excluir centro de custo e seus subgrupos?')">
               <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <button type="submit" class="ver-btn" style="margin-top:6px">Excluir grupo</button>
+              <button type="submit" class="ver-btn">Excluir</button>
             </form>
-            <table style="margin-top:10px"><tbody>{subs_rows}</tbody></table>
-            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding-left:24px">
+          </td>
+        </tr>
+        """)
+        for s in subs:
+            chips = "".join(chip_categoria(c) for c in categorias_por_subgrupo.get(s["id"], []))
+            linhas_html.append(f"""
+            <tr>
+              <td style="padding-left:24px">
+                <form method="post" style="display:flex;gap:6px;align-items:center">
+                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
+                  <input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:180px">
+                  {hidden_num("teto_mensal", s["teto_mensal"])}{hidden_num("teto_anual", s["teto_anual"])}
+                  <button type="submit" class="ver-btn">Salvar</button>
+                </form>
+              </td>
+              <td>
+                <form method="post" style="display:flex;gap:6px;align-items:center">
+                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
+                  <input type="hidden" name="nome" value="{esc(s["nome"])}">
+                  {input_num("teto_mensal", s["teto_mensal"])}
+                  {hidden_num("teto_anual", s["teto_anual"])}
+                  <button type="submit" class="ver-btn">Salvar</button>
+                </form>
+              </td>
+              <td>
+                <form method="post" style="display:flex;gap:6px;align-items:center">
+                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
+                  <input type="hidden" name="nome" value="{esc(s["nome"])}">
+                  {hidden_num("teto_mensal", s["teto_mensal"])}
+                  {input_num("teto_anual", s["teto_anual"])}
+                  <button type="submit" class="ver-btn">Salvar</button>
+                </form>
+              </td>
+              <td style="max-width:340px">
+                {chips}{select_adicionar_categoria(s["id"])}
+              </td>
+              <td>
+                <form method="post" onsubmit="return confirm('Excluir subgrupo? As categorias vinculadas ficam sem centro de custo.')">
+                  <input type="hidden" name="acao" value="excluir_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
+                  <button type="submit" class="ver-btn">Excluir</button>
+                </form>
+              </td>
+            </tr>
+            """)
+        linhas_html.append(f"""
+        <tr>
+          <td colspan="5" style="padding-left:24px;padding-bottom:14px">
+            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:180px">
               {input_num("teto_mensal", None)}{input_num("teto_anual", None)}
               <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
             </form>
-          </div>
-        </details>
+          </td>
+        </tr>
         """)
 
-    def opcoes_subgrupo(categoria_selecionada):
-        opts = ['<option value="">(sem grupo)</option>']
-        for g in grupos_db:
-            subs = subgrupos_por_grupo.get(g["id"], [])
-            if not subs:
-                continue
-            opts.append(f'<optgroup label="{g["nome"]}">')
-            for s in subs:
-                sel = "selected" if mapa_categoria.get(categoria_selecionada) == s["id"] else ""
-                opts.append(f'<option value="{s["id"]}" {sel}>{s["nome"]}</option>')
-            opts.append('</optgroup>')
-        return "".join(opts)
-
-    todas_categorias = sorted(
-        (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_NEUTRAS_PADRAO - CATEGORIAS_OCULTAS,
-        key=lambda c: chave_alfa(cat_pt(c)),
-    )
-    categorias_rows = "".join(
-        f'<tr><td>{cat_pt(c)}</td><td>'
-        f'<form method="post" onchange="this.submit()">'
+    sem_vinculo_html = "".join(
+        f'<div class="cat-row"><span>{cat_pt(c)}</span>'
+        f'<span><form method="post" style="display:inline">'
         f'<input type="hidden" name="acao" value="mapear_categoria"><input type="hidden" name="categoria" value="{esc(c)}">'
-        f'<select name="subgrupo_id" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{opcoes_subgrupo(c)}</select>'
-        f'</form></td></tr>'
-        for c in todas_categorias
-    )
+        f'<select name="subgrupo_id" onchange="this.form.submit()" style="padding:5px 7px;border:1px solid #ccc;border-radius:6px;font-size:12px">'
+        f'<option value="">vincular a…</option>'
+        + "".join(
+            f'<optgroup label="{esc(g["nome"])}">' +
+            "".join(f'<option value="{s["id"]}">{esc(s["nome"])}</option>' for s in subgrupos_por_grupo.get(g["id"], []))
+            + '</optgroup>'
+            for g in grupos_db if subgrupos_por_grupo.get(g["id"])
+        ) +
+        f'</select></form></span></div>'
+        for c in categorias_sem_vinculo
+    ) or '<div class="cat-row"><span>Todas as categorias têm um centro de custo definido.</span></div>'
 
     return f"""
-    <html><head><title>Gerenciar Grupos de Custo · Pé de Meia</title>{BASE_CSS}</head>
+    <html><head><title>Centro de Custos · Pé de Meia</title>{BASE_CSS}</head>
     <body>
-      {topbar_html('Gerenciar Grupos de Custo', 'grupos')}
+      {topbar_html('Centro de Custos', 'grupos')}
       <div class="wrap">
-        <div style="font-size:13px;color:#666;margin-bottom:16px">
-          Isto e o <strong>Centro de Custo</strong> (o que voce gastou). Para classificar por pessoa, projeto/evento
-          ou outra dimensao independente, use <a href="/dimensoes">Gerenciar dimensoes</a>.
-        </div>
+        <details class="cat-breakdown">
+          <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">Como isso se relaciona com Categorias?</summary>
+          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
+            <strong>Categoria</strong> vem do banco/Pluggy (ex: "Mercado", "Restaurantes") — é o que classifica cada
+            lançamento individualmente, em <a href="/categorias">Gerenciar categorias</a>.
+            <strong>Centro de Custo</strong> é uma camada acima, criada por você, pra agrupar várias categorias
+            parecidas (ex: o centro de custo "Alimentação" pode juntar as categorias "Mercado" e "Restaurantes")
+            e opcionalmente colocar um teto de gasto mensal/anual nesse grupo.
+            Cada categoria pode estar vinculada a no máximo um subgrupo — é esse vínculo que você edita abaixo,
+            na coluna "Categorias vinculadas". Para classificar por pessoa, projeto/evento ou outra dimensão
+            independente da categoria, use <a href="/dimensoes">Gerenciar dimensões</a> em vez disso.
+          </div>
+        </details>
         <div class="cat-breakdown">
-          <h3>Novo grupo</h3>
+          <h3>Novo centro de custo</h3>
           <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="hidden" name="acao" value="criar_grupo">
-            <input name="nome" placeholder="Nome do grupo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+            <input name="nome" placeholder="Nome do centro de custo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
             <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", None)}
             <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", None)}
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar grupo</button>
+            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar</button>
           </form>
         </div>
 
-        {"".join(grupos_html)}
-
-        <details class="cat-breakdown lembrar-aberto" id="grupo-vincular" style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">Vincular categorias aos subgrupos</summary>
-          <div style="padding:0 18px 18px 18px">
-            <table>
-              <thead><tr><th>Categoria</th><th>Subgrupo</th></tr></thead>
-              <tbody>{categorias_rows}</tbody>
-            </table>
+        <div class="cat-breakdown">
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
+            Cada centro de custo tem um ou mais subgrupos, e cada subgrupo reúne as categorias vinculadas a ele
+            (coluna "Categorias vinculadas" — clique no × pra desvincular, ou use o seletor pra vincular mais uma).
           </div>
-        </details>
+          <table class="compacta">
+            <thead><tr>
+              <th>Subgrupo</th><th>Teto mensal</th><th>Teto anual</th><th>Categorias vinculadas</th><th>Remover</th>
+            </tr></thead>
+            <tbody>{"".join(linhas_html)}</tbody>
+          </table>
+        </div>
+
+        <div class="cat-breakdown">
+          <h3>Categorias sem centro de custo</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+            Essas categorias ainda não entram em nenhum centro de custo — não aparecem nos totais por grupo do DRE.
+          </div>
+          {sem_vinculo_html}
+        </div>
       </div>
-      <script>
-        (function () {{
-          var CHAVE = "pedemeia_aberto_grupos";
-          var abertos;
-          try {{ abertos = JSON.parse(localStorage.getItem(CHAVE) || "[]"); }} catch (e) {{ abertos = []; }}
-          document.querySelectorAll("details.lembrar-aberto").forEach(function (det) {{
-            if (abertos.indexOf(det.id) !== -1) det.open = true;
-            det.addEventListener("toggle", function () {{
-              var atual;
-              try {{ atual = JSON.parse(localStorage.getItem(CHAVE) || "[]"); }} catch (e) {{ atual = []; }}
-              var idx = atual.indexOf(det.id);
-              if (det.open && idx === -1) atual.push(det.id);
-              if (!det.open && idx !== -1) atual.splice(idx, 1);
-              localStorage.setItem(CHAVE, JSON.stringify(atual));
-            }});
-          }});
-        }})();
-      </script>
     </body></html>
     """
 
