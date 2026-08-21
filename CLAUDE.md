@@ -178,3 +178,21 @@ BRDrive disponíveis no ambiente (vendas, propostas comerciais, etc.) são de ou
 ## Deploy automático
 
 Webhook do GitHub -> Coolify configurado em 20/08/2026. Todo push na `main` dispara build/deploy sozinho, sem precisar chamar a API do Coolify manualmente.
+
+## Testes automatizados
+
+`tests/` cobre a "regra de ouro" do DRE (o que é despesa de verdade) e as funções auxiliares
+puras (`cat_pt`, `esc`, `json_script`, `chave_alfa`, `_fmt_moeda`, `_barra_html`, hash de senha,
+permissões por perfil). `app.py` dá pra importar sem banco — `migrate()` e
+`recarregar_categorias_db()` engolem qualquer erro de conexão e seguem com estado padrão — por
+isso os testes importam o `app.py` de verdade em vez de duplicar a lógica.
+
+Não cobre: as queries SQL em si (exigem Postgres real, fora do escopo hoje) — `TestNaturezaEfetiva`
+em `tests/test_dre_logic.py` é um espelho em Python do `CASE` de `NATUREZA_SQL`; se a SQL mudar,
+essa função e os testes têm que mudar junto (não há checagem automática de que os dois batem).
+
+Rodar localmente:
+```bash
+pip install pytest flask psycopg2-binary
+pytest tests/ -v
+```
