@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block conteudo %}
+<div class="cat-breakdown">
+  <h3>Você não tem acesso a esta área</h3>
+  <div style="font-size:13px;color:var(--ink-soft)">
+    Esta tela exige a permissão <strong>{{ permissao }}</strong>.
+    Peça a um administrador para liberar em Configurações → Usuários e permissões.
+  </div>
+</div>
+{% endblock %}

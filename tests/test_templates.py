@@ -142,3 +142,48 @@ class TestIndex:
         # 'fluxo' e o padrao (direcao decide), nao faz sentido escolher na mao
         html = self.render([self.linha()])
         assert 'value="fluxo"' not in html
+
+
+class TestRelatorios:
+    """Ultima tela a sair da f-string. Todo o conteudo chega por AJAX, entao o
+    template so monta os filtros e os containers vazios."""
+
+    BASE = dict(
+        titulo="Relatórios", topbar="", visao="despesa",
+        visao_opcoes=[("despesa", "Despesas"), ("receita", "Receitas")],
+        agrupar="categoria",
+        agrupar_opcoes=[("categoria", "Categoria"), ("mes", "Período (mês)")],
+        filtros_chip=[], data_ini="", data_fim="",
+    )
+
+    def test_marca_a_visao_e_o_agrupamento_atuais(self, ctx):
+        html = render_template(
+            "relatorios.html", **{**self.BASE, "visao": "receita", "agrupar": "mes"}
+        )
+        assert '<option value="receita" selected>' in html
+        assert '<option value="mes" selected>' in html
+        assert '<option value="despesa" >' in html or '<option value="despesa">' in html
+
+    def test_containers_que_o_ajax_preenche_existem(self, ctx):
+        html = render_template("relatorios.html", **self.BASE)
+        for alvo in ("totalGeral", "qtdGeral", "gruposCont", "chartGrupos", "chipsSel"):
+            assert f'id="{alvo}"' in html
+
+    def test_carrega_chartjs_e_o_script_da_tela(self, ctx):
+        html = render_template("relatorios.html", **self.BASE)
+        assert "chart.umd.min.js" in html
+        assert "/static/relatorios.js" in html
+
+    def test_filtros_chip_entram_como_html(self, ctx):
+        # chip_filter_html() ja devolve HTML pronto e escapado
+        html = render_template(
+            "relatorios.html",
+            **{**self.BASE, "filtros_chip": ['<div class="chipfilter">Origem</div>']},
+        )
+        assert '<div class="chipfilter">Origem</div>' in html
+
+    def test_aviso_contabil_do_dre_continua_na_tela(self, ctx):
+        # a regra de ouro: investimento/bem/transferencia nao sao despesa
+        html = render_template("relatorios.html", **self.BASE)
+        assert "não são despesa" in html
+        assert 'href="/categorias"' in html

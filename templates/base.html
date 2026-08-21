@@ -17,6 +17,8 @@
   <link rel="icon" type="image/png" href="/static/favicon.png">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/tabelas.js"></script>
+  {# para tela que precisa de biblioteca propria no head (ex: Chart.js em /relatorios) #}
+  {% block head_extra %}{% endblock %}
 </head>
 <body>
   {# Layout padrao: topbar + conteudo dentro de .wrap. Telas que precisam de outra

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block head_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block conteudo %}
+<div style="font-size:12px;color:#888;margin-bottom:10px">
+  Pagamento de fatura, transferência entre contas próprias, aplicações e compra de bens
+  <strong>não são despesa</strong> — só trocam a forma do dinheiro. Por isso ficam fora da visão de Despesas
+  (veja a <a href="/categorias">classificação de naturezas</a>).
+</div>
+
+<div class="rel-filtros">
+  <select name="visao" id="selVisao" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">
+    {% for val, rotulo in visao_opcoes %}
+      <option value="{{ val }}" {{ 'selected' if val == visao }}>{{ rotulo }}</option>
+    {% endfor %}
+  </select>
+  <select name="agrupar" id="selAgrupar" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">
+    {% for val, rotulo in agrupar_opcoes %}
+      <option value="{{ val }}" {{ 'selected' if val == agrupar }}>{{ rotulo }}</option>
+    {% endfor %}
+  </select>
+  {# HTML montado por chip_filter_html(), que ja escapa o que vem do banco #}
+  {% for html in filtros_chip %}{{ html|safe }}{% endfor %}
+  <div class="rel-datewrap">
+    <input type="date" name="data_ini" id="inputDataIni" value="{{ data_ini }}" onchange="aplicarFiltros()">
+    <span style="color:#bbb">–</span>
+    <input type="date" name="data_fim" id="inputDataFim" value="{{ data_fim }}" onchange="aplicarFiltros()">
+  </div>
+  <div class="rel-actions">
+    <a href="/relatorios" class="chip-btn" style="text-decoration:none">Limpar tudo</a>
+  </div>
+</div>
+<div class="chips-sel" id="chipsSel" style="margin:-6px 0 14px 0"></div>
+
+<div class="cards">
+  <div class="card"><div class="label" id="labelTotal">Total no filtro</div><div class="val" id="totalGeral">-</div></div>
+  <div class="card"><div class="label">Lançamentos</div><div class="val" id="qtdGeral">-</div></div>
+</div>
+
+<div class="chart-card">
+  <h3 id="graficoTitulo">Gráfico</h3>
+  <canvas id="chartGrupos" height="90"></canvas>
+</div>
+
+<div class="cat-breakdown">
+  <h3>Totais agrupados <span style="font-weight:400;font-size:12px;color:#999">(clique em um grupo para ver os lançamentos)</span></h3>
+  <div id="gruposCont"><div style="color:#888;padding:10px 0">Carregando...</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/relatorios.js"></script>
+{% endblock %}

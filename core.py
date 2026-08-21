@@ -105,18 +105,12 @@ def requer(permissao):
                 titulo, _ = PERMISSOES.get(permissao, (permissao, ""))
                 if request.path.startswith("/api/"):
                     return jsonify({"ok": False, "erro": f"Sem permissão para: {titulo}"}), 403
-                return f"""
-                <html><head><title>Sem permissão · {APP_NOME}</title>{BASE_CSS}</head>
-                <body>{topbar_html('Sem permissão')}
-                  <div class="wrap"><div class="cat-breakdown">
-                    <h3>Você não tem acesso a esta área</h3>
-                    <div style="font-size:13px;color:var(--ink-soft)">
-                      Esta tela exige a permissão <strong>{titulo}</strong>.
-                      Peça a um administrador para liberar em Configurações → Usuários e permissões.
-                    </div>
-                  </div></div>
-                </body></html>
-                """, 403
+                return render_template(
+                    "sem_permissao.html",
+                    titulo="Sem permissão",
+                    topbar=topbar_html("Sem permissão"),
+                    permissao=titulo,
+                ), 403
             return view(*args, **kwargs)
         return wrapped
     return decorador
@@ -923,15 +917,8 @@ migrate()
 recarregar_categorias_db()
 
 
-BASE_CSS_HEAD = """
-<link rel="icon" type="image/png" href="/static/favicon.png">
-"""
 
 
-BASE_CSS = BASE_CSS_HEAD + """
-<link rel="stylesheet" href="/static/app.css">
-<script src="/static/tabelas.js"></script>
-"""
 
 
 def topbar_html(titulo, ativo=None):
