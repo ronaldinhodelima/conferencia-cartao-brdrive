@@ -2108,7 +2108,13 @@ def index():
               const novaTabela = doc.querySelector('table.compacta');
               const novosCards = doc.querySelector('.cards');
               const novaCat = doc.querySelector('details.cat-breakdown');
-              if (novaTabela) document.querySelector('table.compacta').replaceWith(novaTabela);
+              if (novaTabela) {{
+                document.querySelector('table.compacta').replaceWith(novaTabela);
+                // a tabela nova veio do servidor sem os listeners nem as alcas de
+                // redimensionar (sao criados por JS) - replaceWith descarta o elemento
+                // antigo junto com tudo que estava anexado nele, entao precisa reativar
+                ativarTabelaAjustavel(novaTabela, 'lancamentos');
+              }}
               if (novosCards) document.querySelector('.cards').replaceWith(novosCards);
               const catAtual = document.querySelector('details.cat-breakdown');
               if (novaCat && catAtual) {{
