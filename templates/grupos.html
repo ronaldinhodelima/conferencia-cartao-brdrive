@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+<details class="cat-breakdown">
+  <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">Como isso se relaciona com Categorias?</summary>
+  <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
+    <strong>Categoria</strong> vem do banco/Pluggy (ex: "Mercado", "Restaurantes") — é o que
+    classifica cada lançamento individualmente, em <a href="/categorias">Gerenciar categorias</a>.
+    <strong>Centro de Custo</strong> é uma camada acima, criada por você, pra agrupar várias
+    categorias parecidas (ex: o centro de custo "Alimentação" pode juntar as categorias "Mercado"
+    e "Restaurantes"). Cada categoria pode estar vinculada a no máximo um subgrupo — é esse
+    vínculo que você edita abaixo, na coluna "Categorias vinculadas". Um <strong>centro de
+    custo</strong> tem um ou mais <strong>subgrupos</strong> (a árvore abaixo mostra isso: cada
+    subgrupo aparece recuado, ligado por uma linha ao centro de custo dele). Para classificar por
+    pessoa, projeto/evento ou outra dimensão independente da categoria — inclusive definir um
+    <strong>teto de gasto</strong> por pessoa ou projeto — use
+    <a href="/dimensoes">Gerenciar dimensões</a> em vez disso.
+  </div>
+</details>
+
+<div class="cat-breakdown">
+  <h3>Novo centro de custo</h3>
+  <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="criar_grupo">
+    <input name="nome" placeholder="Nome do centro de custo"
+           style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+    <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">
+      Criar
+    </button>
+  </form>
+</div>
+
+<div class="cat-breakdown">
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
+    Cada centro de custo (linha em destaque) tem um ou mais subgrupos (recuados, ligados por uma
+    linha), e cada subgrupo reúne as categorias vinculadas a ele — clique no × pra desvincular,
+    ou use o seletor pra vincular mais uma.
+  </div>
+  <div class="tabela-scroll">
+  <table class="compacta ajustavel" data-tabela="centro-custos" data-sem-ordenar data-sem-reordenar>
+    <thead><tr>
+      <th>Centro de custo / Subgrupo</th><th>Categorias vinculadas</th><th>Remover</th>
+    </tr></thead>
+    <tbody>
+      {% for g in grupos %}
+      {# linha do centro de custo: em destaque, colspan porque nao tem categoria vinculada #}
+      <tr style="background:var(--bg)">
+        <td colspan="2" style="padding-top:18px">
+          <form method="post" style="display:flex;gap:8px;align-items:center">
+            <input type="hidden" name="acao" value="editar_grupo">
+            <input type="hidden" name="grupo_id" value="{{ g.id }}">
+            <input name="nome" value="{{ g.nome }}"
+                   style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:700;font-size:14px;width:260px">
+            <button type="submit" class="ver-btn">Salvar</button>
+          </form>
+        </td>
+        <td style="padding-top:18px">
+          <form method="post" onsubmit="return confirm('Excluir centro de custo e seus subgrupos?')">
+            <input type="hidden" name="acao" value="excluir_grupo">
+            <input type="hidden" name="grupo_id" value="{{ g.id }}">
+            <button type="submit" class="ver-btn">Excluir</button>
+          </form>
+        </td>
+      </tr>
+
+      {% for s in subgrupos_por_grupo.get(g.id, []) %}
+      <tr>
+        <td style="padding-left:22px;border-left:2px solid var(--line);position:relative">
+          <span style="position:absolute;left:6px;color:var(--ink-faint);font-size:13px">└</span>
+          <form method="post" style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="acao" value="editar_subgrupo">
+            <input type="hidden" name="subgrupo_id" value="{{ s.id }}">
+            <input name="nome" value="{{ s.nome }}"
+                   style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+            <button type="submit" class="ver-btn">Salvar</button>
+          </form>
+        </td>
+        <td style="max-width:340px">
+          {% for c in categorias_por_subgrupo.get(s.id, []) %}
+          <form method="post" style="display:inline-flex;align-items:center;gap:3px;background:var(--bg);
+                border:1px solid var(--line);border-radius:999px;padding:3px 3px 3px 10px;font-size:12px;margin:2px">
+            <input type="hidden" name="acao" value="mapear_categoria">
+            <input type="hidden" name="categoria" value="{{ c.chave }}">
+            <input type="hidden" name="subgrupo_id" value="">
+            {{ c.nome }}
+            <button type="submit" title="Desvincular"
+                    style="border:none;background:none;cursor:pointer;color:var(--ink-faint);
+                           font-weight:700;padding:2px 6px;font-size:13px">×</button>
+          </form>
+          {% endfor %}
+          <form method="post" style="display:inline-block">
+            <input type="hidden" name="acao" value="mapear_categoria">
+            <input type="hidden" name="subgrupo_id" value="{{ s.id }}">
+            <select name="categoria" onchange="this.form.submit()"
+                    style="padding:4px 6px;border:1px solid #ccc;border-radius:6px;font-size:12px;color:var(--ink-faint)">
+              <option value="">+ vincular categoria…</option>
+              {% for c in categorias if c.subgrupo_id != s.id %}
+              <option value="{{ c.chave }}">{{ c.nome }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </td>
+        <td>
+          <form method="post" onsubmit="return confirm('Excluir subgrupo? As categorias vinculadas ficam sem centro de custo.')">
+            <input type="hidden" name="acao" value="excluir_subgrupo">
+            <input type="hidden" name="subgrupo_id" value="{{ s.id }}">
+            <button type="submit" class="ver-btn">Excluir</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+
+      <tr>
+        <td colspan="3" style="padding-left:22px;border-left:2px solid var(--line);padding-bottom:16px">
+          <form method="post" style="display:flex;gap:8px;align-items:center">
+            <input type="hidden" name="acao" value="criar_subgrupo">
+            <input type="hidden" name="grupo_id" value="{{ g.id }}">
+            <input name="nome" placeholder="Novo subgrupo"
+                   style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+            <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="cat-breakdown">
+  <h3>Categorias sem centro de custo</h3>
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+    Essas categorias ainda não entram em nenhum centro de custo — não aparecem nos totais por
+    grupo do DRE.
+  </div>
+  {% for c in sem_vinculo %}
+  <div class="cat-row">
+    <span>{{ c.nome }}</span>
+    <span>
+      <form method="post" style="display:inline">
+        <input type="hidden" name="acao" value="mapear_categoria">
+        <input type="hidden" name="categoria" value="{{ c.chave }}">
+        <select name="subgrupo_id" onchange="this.form.submit()"
+                style="padding:5px 7px;border:1px solid #ccc;border-radius:6px;font-size:12px">
+          <option value="">vincular a…</option>
+          {% for g in grupos %}
+            {% if subgrupos_por_grupo.get(g.id) %}
+            <optgroup label="{{ g.nome }}">
+              {% for s in subgrupos_por_grupo[g.id] %}
+              <option value="{{ s.id }}">{{ s.nome }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </form>
+    </span>
+  </div>
+  {% else %}
+  <div class="cat-row"><span>Todas as categorias têm um centro de custo definido.</span></div>
+  {% endfor %}
+</div>
+
+{% endblock %}

@@ -2643,272 +2643,32 @@ def grupos_view():
 
     todas_categorias = sorted(
         (set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_NEUTRAS_PADRAO - CATEGORIAS_OCULTAS,
-        key=lambda c: chave_alfa(cat_pt(c)),
+        key=lambda c: chave_alfa(cat_pt_puro(c)),
     )
+
+    # cada categoria vira {chave, nome, subgrupo_id} - o template filtra por
+    # subgrupo_id pra montar os chips e o dropdown de vincular
+    categorias = [
+        {"chave": c, "nome": cat_pt_puro(c), "subgrupo_id": mapa_categoria.get(c)}
+        for c in todas_categorias
+    ]
     categorias_por_subgrupo = {}
-    for c in todas_categorias:
-        sid = mapa_categoria.get(c)
-        if sid:
-            categorias_por_subgrupo.setdefault(sid, []).append(c)
-    categorias_sem_vinculo = [c for c in todas_categorias if not mapa_categoria.get(c)]
+    for c in categorias:
+        if c["subgrupo_id"]:
+            categorias_por_subgrupo.setdefault(c["subgrupo_id"], []).append(c)
+    sem_vinculo = [c for c in categorias if not c["subgrupo_id"]]
 
-    def chip_categoria(c):
-        """Categoria ja vinculada a este subgrupo - clicar no x desvincula (some para 'sem centro de custo')."""
-        return (
-            f'<form method="post" style="display:inline-flex;align-items:center;gap:3px;background:var(--bg);'
-            f'border:1px solid var(--line);border-radius:999px;padding:3px 3px 3px 10px;font-size:12px;margin:2px">'
-            f'<input type="hidden" name="acao" value="mapear_categoria">'
-            f'<input type="hidden" name="categoria" value="{esc(c)}">'
-            f'<input type="hidden" name="subgrupo_id" value="">'
-            f'{cat_pt(c)}'
-            f'<button type="submit" title="Desvincular" style="border:none;background:none;cursor:pointer;'
-            f'color:var(--ink-faint);font-weight:700;padding:2px 6px;font-size:13px">×</button>'
-            f'</form>'
-        )
-
-    def select_adicionar_categoria(subgrupo_id):
-        """Dropdown para vincular mais uma categoria a este subgrupo (move de onde estiver, se estiver em outro)."""
-        opts = ['<option value="">+ vincular categoria…</option>']
-        for c in todas_categorias:
-            if mapa_categoria.get(c) == subgrupo_id:
-                continue
-            opts.append(f'<option value="{esc(c)}">{cat_pt(c)}</option>')
-        return (
-            f'<form method="post" style="display:inline-block">'
-            f'<input type="hidden" name="acao" value="mapear_categoria">'
-            f'<input type="hidden" name="subgrupo_id" value="{subgrupo_id}">'
-            f'<select name="categoria" onchange="this.form.submit()" '
-            f'style="padding:4px 6px;border:1px solid #ccc;border-radius:6px;font-size:12px;color:var(--ink-faint)">'
-            f'{"".join(opts)}</select></form>'
-        )
-
-    linhas_html = []
-    for g in grupos_db:
-        subs = subgrupos_por_grupo.get(g["id"], [])
-        linhas_html.append(f"""
-        <tr style="background:var(--bg)">
-          <td colspan="2" style="padding-top:18px">
-            <form method="post" style="display:flex;gap:8px;align-items:center">
-              <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" value="{esc(g["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:700;font-size:14px;width:260px">
-              <button type="submit" class="ver-btn">Salvar</button>
-            </form>
-          </td>
-          <td style="padding-top:18px">
-            <form method="post" onsubmit="return confirm('Excluir centro de custo e seus subgrupos?')">
-              <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <button type="submit" class="ver-btn">Excluir</button>
-            </form>
-          </td>
-        </tr>
-        """)
-        for s in subs:
-            chips = "".join(chip_categoria(c) for c in categorias_por_subgrupo.get(s["id"], []))
-            linhas_html.append(f"""
-            <tr>
-              <td style="padding-left:22px;border-left:2px solid var(--line);position:relative">
-                <span style="position:absolute;left:6px;color:var(--ink-faint);font-size:13px">└</span>
-                <form method="post" style="display:flex;gap:6px;align-items:center">
-                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
-                  <input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
-                  <button type="submit" class="ver-btn">Salvar</button>
-                </form>
-              </td>
-              <td style="max-width:340px">
-                {chips}{select_adicionar_categoria(s["id"])}
-              </td>
-              <td>
-                <form method="post" onsubmit="return confirm('Excluir subgrupo? As categorias vinculadas ficam sem centro de custo.')">
-                  <input type="hidden" name="acao" value="excluir_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
-                  <button type="submit" class="ver-btn">Excluir</button>
-                </form>
-              </td>
-            </tr>
-            """)
-        linhas_html.append(f"""
-        <tr>
-          <td colspan="3" style="padding-left:22px;border-left:2px solid var(--line);padding-bottom:16px">
-            <form method="post" style="display:flex;gap:8px;align-items:center">
-              <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
-              <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
-            </form>
-          </td>
-        </tr>
-        """)
-
-    sem_vinculo_html = "".join(
-        f'<div class="cat-row"><span>{cat_pt(c)}</span>'
-        f'<span><form method="post" style="display:inline">'
-        f'<input type="hidden" name="acao" value="mapear_categoria"><input type="hidden" name="categoria" value="{esc(c)}">'
-        f'<select name="subgrupo_id" onchange="this.form.submit()" style="padding:5px 7px;border:1px solid #ccc;border-radius:6px;font-size:12px">'
-        f'<option value="">vincular a…</option>'
-        + "".join(
-            f'<optgroup label="{esc(g["nome"])}">' +
-            "".join(f'<option value="{s["id"]}">{esc(s["nome"])}</option>' for s in subgrupos_por_grupo.get(g["id"], []))
-            + '</optgroup>'
-            for g in grupos_db if subgrupos_por_grupo.get(g["id"])
-        ) +
-        f'</select></form></span></div>'
-        for c in categorias_sem_vinculo
-    ) or '<div class="cat-row"><span>Todas as categorias têm um centro de custo definido.</span></div>'
-
-    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
-
-    return f"""
-    <html><head><title>Centro de Custos · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Centro de Custos', 'grupos')}
-      <div class="wrap">
-        {erro_html}
-        <details class="cat-breakdown">
-          <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">Como isso se relaciona com Categorias?</summary>
-          <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
-            <strong>Categoria</strong> vem do banco/Pluggy (ex: "Mercado", "Restaurantes") — é o que classifica cada
-            lançamento individualmente, em <a href="/categorias">Gerenciar categorias</a>.
-            <strong>Centro de Custo</strong> é uma camada acima, criada por você, pra agrupar várias categorias
-            parecidas (ex: o centro de custo "Alimentação" pode juntar as categorias "Mercado" e "Restaurantes").
-            Cada categoria pode estar vinculada a no máximo um subgrupo — é esse vínculo que você edita abaixo,
-            na coluna "Categorias vinculadas". Um <strong>centro de custo</strong> tem um ou mais
-            <strong>subgrupos</strong> (a árvore abaixo mostra isso: cada subgrupo aparece recuado, ligado por
-            uma linha ao centro de custo dele). Para classificar por pessoa, projeto/evento ou outra dimensão
-            independente da categoria — inclusive definir um <strong>teto de gasto</strong> por pessoa ou projeto —
-            use <a href="/dimensoes">Gerenciar dimensões</a> em vez disso.
-          </div>
-        </details>
-        <div class="cat-breakdown">
-          <h3>Novo centro de custo</h3>
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="criar_grupo">
-            <input name="nome" placeholder="Nome do centro de custo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar</button>
-          </form>
-        </div>
-
-        <div class="cat-breakdown">
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
-            Cada centro de custo (linha em destaque) tem um ou mais subgrupos (recuados, ligados por uma linha),
-            e cada subgrupo reúne as categorias vinculadas a ele — clique no × pra desvincular, ou use o seletor
-            pra vincular mais uma.
-          </div>
-          <div class="tabela-scroll">
-          <table class="compacta ajustavel" data-tabela="centro-custos" data-sem-ordenar data-sem-reordenar>
-            <thead><tr>
-              <th>Centro de custo / Subgrupo</th><th>Categorias vinculadas</th><th>Remover</th>
-            </tr></thead>
-            <tbody>{"".join(linhas_html)}</tbody>
-          </table>
-          </div>
-        </div>
-
-        <div class="cat-breakdown">
-          <h3>Categorias sem centro de custo</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
-            Essas categorias ainda não entram em nenhum centro de custo — não aparecem nos totais por grupo do DRE.
-          </div>
-          {sem_vinculo_html}
-        </div>
-      </div>
-    </body></html>
-    """
-
-
-def _montar_filtro_relatorio(dimensoes):
-    """Le os filtros da querystring (request.args) e monta where/params/group_expr reutilizaveis
-    tanto pela pagina quanto pelos endpoints de dados (AJAX)."""
-    categorias_sel = request.args.getlist("categoria")
-    cartoes_sel = request.args.getlist("cartao")
-    origens_sel = request.args.getlist("origem")
-    data_ini = request.args.get("data_ini") or ""
-    data_fim = request.args.get("data_fim") or ""
-    agrupar = request.args.get("agrupar") or "categoria"
-    dim_sel = {}
-    for d in dimensoes:
-        vals = request.args.getlist(f"dim_{d['id']}")
-        if vals:
-            dim_sel[d["id"]] = vals
-
-    # visao do relatorio: o que estamos medindo. Por padrao, despesas (consumo real).
-    # Investimentos, aquisicao de bens e transferencias NAO sao despesa - ver NATUREZAS.
-    visao = request.args.get("visao") or "despesa"
-    if visao not in ("despesa", "receita", "investimento", "tudo"):
-        visao = "despesa"
-
-    where = ["COALESCE(t.duplicada, false) = false"]
-    params = []
-    if visao == "despesa":
-        where.append(NATUREZA_SQL + " = 'despesa'")
-    elif visao == "receita":
-        where.append(NATUREZA_SQL + " = 'receita'")
-    elif visao == "investimento":
-        where.append(NATUREZA_SQL + " IN ('investimento', 'bem')")
-    else:  # tudo: mostra o fluxo de caixa completo, menos o que so troca de bolso
-        where.append(NATUREZA_SQL + " <> 'transferencia'")
-
-    if categorias_sel:
-        where.append("t.categoria IN %s")
-        params.append(tuple(categorias_sel))
-    if cartoes_sel:
-        where.append("t.numero_cartao_final IN %s")
-        params.append(tuple(cartoes_sel))
-    if origens_sel:
-        where.append("t.account_id IN %s")
-        params.append(tuple(origens_sel))
-    if data_ini:
-        where.append("t.data_transacao >= %s")
-        params.append(data_ini)
-    if data_fim:
-        where.append("t.data_transacao <= %s")
-        params.append(data_fim + " 23:59:59")
-    for dim_id, vals in dim_sel.items():
-        where.append(
-            "EXISTS (SELECT 1 FROM cartao.transacao_dimensao td WHERE td.transacao_id = t.transacao_id::text "
-            "AND td.dimensao_id = %s AND td.valor_id IN %s)"
-        )
-        params.append(dim_id)
-        params.append(tuple(int(v) for v in vals))
-    where_sql = " AND ".join(where)
-
-    join_extra = ""
-    if agrupar == "categoria":
-        group_expr = "t.categoria"
-    elif agrupar == "cartao":
-        group_expr = "t.numero_cartao_final"
-    elif agrupar == "origem":
-        group_expr = "t.account_id::text"
-    elif agrupar == "mes":
-        group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
-    elif agrupar.startswith("dim_"):
-        dim_id_grp = agrupar.split("_", 1)[1]
-        join_extra = (
-            f"LEFT JOIN cartao.transacao_dimensao tdg ON tdg.transacao_id = t.transacao_id::text "
-            f"AND tdg.dimensao_id = {int(dim_id_grp)} LEFT JOIN cartao.dimensao_valor dvg ON dvg.id = tdg.valor_id"
-        )
-        group_expr = "COALESCE(dvg.nome, '(nao definido)')"
-    else:
-        agrupar = "categoria"
-        group_expr = "t.categoria"
-
-    # valor somado conforme a visao: na visao de receita invertemos o sinal para
-    # que entrada apareca positiva (VAL_DESPESA e positivo quando o dinheiro sai)
-    soma_expr = f"-{VAL_DESPESA}" if visao == "receita" else VAL_DESPESA
-
-    return {
-        "categorias_sel": categorias_sel,
-        "cartoes_sel": cartoes_sel,
-        "origens_sel": origens_sel,
-        "data_ini": data_ini,
-        "data_fim": data_fim,
-        "agrupar": agrupar,
-        "visao": visao,
-        "dim_sel": dim_sel,
-        "where_sql": where_sql,
-        "params": params,
-        "join_extra": join_extra,
-        "join_natureza": JOIN_NATUREZA,
-        "group_expr": group_expr,
-        "soma_expr": soma_expr,
-    }
+    return render_template(
+        "grupos.html",
+        titulo="Centro de Custos",
+        topbar=topbar_html("Centro de Custos", "grupos"),
+        erro=erro,
+        grupos=grupos_db,
+        subgrupos_por_grupo=subgrupos_por_grupo,
+        categorias=categorias,
+        categorias_por_subgrupo=categorias_por_subgrupo,
+        sem_vinculo=sem_vinculo,
+    )
 
 
 @app.route("/relatorios")
