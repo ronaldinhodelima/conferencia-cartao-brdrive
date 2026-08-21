@@ -3108,32 +3108,54 @@ def grupos_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    erro = None
     if request.method == "POST":
         acao = request.form.get("acao")
         if acao == "criar_grupo":
-            cur.execute(
-                "INSERT INTO cartao.grupo_custo (nome) VALUES (%s);",
-                (request.form.get("nome", "").strip(),),
-            )
+            nome = request.form.get("nome", "").strip()
+            try:
+                cur.execute("INSERT INTO cartao.grupo_custo (nome) VALUES (%s);", (nome,))
+                conn.commit()
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                erro = f"Já existe um centro de custo chamado '{esc(nome)}'."
         elif acao == "editar_grupo":
-            cur.execute(
-                "UPDATE cartao.grupo_custo SET nome=%s WHERE id=%s;",
-                (request.form.get("nome", "").strip(), request.form.get("grupo_id")),
-            )
+            try:
+                cur.execute(
+                    "UPDATE cartao.grupo_custo SET nome=%s WHERE id=%s;",
+                    (request.form.get("nome", "").strip(), request.form.get("grupo_id")),
+                )
+                conn.commit()
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                erro = "Já existe um centro de custo com esse nome."
         elif acao == "excluir_grupo":
             cur.execute("DELETE FROM cartao.grupo_custo WHERE id=%s;", (request.form.get("grupo_id"),))
+            conn.commit()
         elif acao == "criar_subgrupo":
-            cur.execute(
-                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s,%s);",
-                (request.form.get("grupo_id"), request.form.get("nome", "").strip()),
-            )
+            nome = request.form.get("nome", "").strip()
+            try:
+                cur.execute(
+                    "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s,%s);",
+                    (request.form.get("grupo_id"), nome),
+                )
+                conn.commit()
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                erro = f"Já existe um subgrupo chamado '{esc(nome)}' nesse centro de custo."
         elif acao == "editar_subgrupo":
-            cur.execute(
-                "UPDATE cartao.subgrupo_custo SET nome=%s WHERE id=%s;",
-                (request.form.get("nome", "").strip(), request.form.get("subgrupo_id")),
-            )
+            try:
+                cur.execute(
+                    "UPDATE cartao.subgrupo_custo SET nome=%s WHERE id=%s;",
+                    (request.form.get("nome", "").strip(), request.form.get("subgrupo_id")),
+                )
+                conn.commit()
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                erro = "Já existe um subgrupo com esse nome nesse centro de custo."
         elif acao == "excluir_subgrupo":
             cur.execute("DELETE FROM cartao.subgrupo_custo WHERE id=%s;", (request.form.get("subgrupo_id"),))
+            conn.commit()
         elif acao == "mapear_categoria":
             subgrupo_id = request.form.get("subgrupo_id") or None
             cur.execute(
@@ -3141,7 +3163,7 @@ def grupos_view():
                 "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
                 (request.form.get("categoria"), subgrupo_id),
             )
-        conn.commit()
+            conn.commit()
 
     cur.execute("SELECT id, nome FROM cartao.grupo_custo;")
     grupos_db = sorted(cur.fetchall(), key=lambda g: chave_alfa(g["nome"]))
@@ -3268,11 +3290,14 @@ def grupos_view():
         for c in categorias_sem_vinculo
     ) or '<div class="cat-row"><span>Todas as categorias têm um centro de custo definido.</span></div>'
 
+    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
+
     return f"""
     <html><head><title>Centro de Custos · Pé de Meia</title>{BASE_CSS}</head>
     <body>
       {topbar_html('Centro de Custos', 'grupos')}
       <div class="wrap">
+        {erro_html}
         <details class="cat-breakdown">
           <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--ink-soft)">Como isso se relaciona com Categorias?</summary>
           <div style="font-size:13px;color:var(--ink-soft);line-height:1.7;margin-top:10px">
