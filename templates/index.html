@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block conteudo %}
+<div class="filters" style="flex-wrap:wrap;gap:14px">
+  <div>
+    <label>Mes</label>
+    <div style="display:flex;align-items:center;gap:4px">
+      <button type="button" onclick="mudarMes(-1)" title="Mês anterior"
+              style="padding:6px 12px;font-size:15px;line-height:1">‹</button>
+      <input type="month" id="mesInput" value="{{ mes }}" onchange="aplicarFiltros()">
+      <button type="button" onclick="mudarMes(1)" title="Próximo mês"
+              style="padding:6px 12px;font-size:15px;line-height:1">›</button>
+    </div>
+  </div>
+  <div>
+    <label>Status</label>
+    <select id="statusInput" onchange="aplicarFiltros()">
+      <option value="todas" {{ 'selected' if status == 'todas' }}>Todas</option>
+      <option value="pendente" {{ 'selected' if status == 'pendente' }}>Pendentes</option>
+      <option value="conferida" {{ 'selected' if status == 'conferida' }}>Conferidas</option>
+    </select>
+  </div>
+  {# HTML montado por chip_filter_html(), que ja escapa o que vem do banco #}
+  {{ origem_filtro_html|safe }}
+  <div class="chips-sel" id="chipsSel"></div>
+  {% if pode_manual %}
+    <div style="margin-left:auto"><button type="button" onclick="toggleFormManual()">+ Lançamento manual</button></div>
+  {% endif %}
+</div>
+
+<div id="formManual" class="cat-breakdown" style="display:none" {{ 'hidden' if not pode_manual }}>
+  <h3>Novo lançamento manual (dinheiro)</h3>
+  <form onsubmit="return salvarManual(event)" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="date" id="manualData" required value="{{ hoje_iso }}" style="padding:7px 9px;border:1px solid var(--line);border-radius:6px">
+    <input type="text" id="manualDescricao" placeholder="Descrição" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;flex:1;min-width:160px">
+    <select id="manualDirecao" style="padding:7px 9px">
+      <option value="saida">Saída</option>
+      <option value="entrada">Entrada</option>
+    </select>
+    <input type="number" id="manualValor" step="0.01" min="0.01" placeholder="Valor (R$)" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:130px">
+    <select id="manualCategoria" style="padding:7px 9px">
+      {% for c in categorias %}<option value="{{ c.chave }}">{{ c.nome }}</option>{% endfor %}
+    </select>
+    <button type="submit">Adicionar</button>
+    <span id="manualStatus" style="font-size:12px;color:#888"></span>
+  </form>
+</div>
+
+<div class="cards">
+  <div class="card"><div class="label" title="Receitas do mês">Receitas do mês</div><div class="val" style="color:#1f8a53">{{ receita_mes|moeda }}</div></div>
+  <div class="card"><div class="label" title="Despesas do mês">Despesas do mês</div><div class="val" style="color:#c23c34">{{ gasto_real|moeda }}</div></div>
+  <div class="card"><div class="label" title="Resultado do mês (receitas menos despesas)">Resultado do mês</div><div class="val" style="color:{{ '#1f8a53' if resultado_mes >= 0 else '#c23c34' }}">{{ resultado_mes|moeda }}</div></div>
+  <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{{ conf }} / {{ total }}</div></div>
+</div>
+
+<details class="cat-breakdown">
+  <summary>Gasto por categoria (mês)</summary>
+  <div class="det-body">
+    {% for c in por_categoria %}
+      <div class="cat-row"><span>{{ c.nome }}</span><span>{{ c.total|moeda }}</span></div>
+    {% else %}
+      <div class="cat-row"><span>Sem dados</span></div>
+    {% endfor %}
+  </div>
+</details>
+
+<table class="compacta ajustavel" id="tabela-lancamentos" data-tabela="lancamentos">
+  <thead><tr>
+    <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{% for d in dimensoes %}<th class="cel-dim" data-col="dim_{{ d.id }}">{{ d.nome }}</th>{% endfor %}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">OK</th><th class="cel-status" data-col="status"></th>
+  </tr></thead>
+  <tbody>
+    {% for r in linhas %}
+      <tr class="{{ r.classes }}" data-id="{{ r.id }}" onclick="linhaClick(event, {{ r.id|tojson }})">
+        <td class="cel-data" data-col="data" data-tip="{{ r.data_full }}" data-sort="{{ r.data_sort }}">{{ r.data_dia }}<br>{{ r.data_hora }}</td>
+        <td class="cel-desc" data-col="desc" data-tip="{{ r.descricao }}">{{ r.descricao }}</td>
+        {# o selo e HTML gerado pelo app; o texto vem do apelido do cartao, digitado
+           pelo usuario, entao vai escapado #}
+        <td class="cel-origem" data-col="origem" data-tip="{{ r.origem_completa }}">{{ r.origem_selo|safe }}<span>{{ r.origem_texto }}</span></td>
+        <td class="cel-dim" data-col="categoria">
+          <select class="cat-select" {{ 'disabled' if not pode_editar }} onchange="salvar({{ r.id|tojson }}, this)">
+            {% for c in categorias %}
+              <option value="{{ c.chave }}" {{ 'selected' if c.chave == r.categoria }}>{{ c.nome }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        {% for d in dimensoes %}
+          <td class="cel-dim" data-col="dim_{{ d.id }}">
+            <select class="dim-select" data-dim="{{ d.id }}"
+                    {% if d.obrigatoria and not r.dims.get(d.id) %}style="border-color:#c23c34;background:#fbeceb"{% endif %}
+                    {{ 'disabled' if not pode_editar }} onchange="salvar({{ r.id|tojson }}, this)">
+              <option value="">(nao definido)</option>
+              {% for v in valores_por_dim.get(d.id, []) %}
+                <option value="{{ v.id }}" {{ 'selected' if v.id == r.dims.get(d.id) }}>{{ v.nome }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        {% endfor %}
+        <td class="valor cel-valor" data-col="valor" style="{{ r.cor_valor }}" data-sort="{{ r.valor_sort }}">{{ r.valor_fmt }}</td>
+        <td class="cel-obs" data-col="obs"><input class="obs-input" type="text" value="{{ r.observacao }}" placeholder="obs..." {{ 'disabled' if not pode_editar }} onblur="salvar({{ r.id|tojson }}, this)"></td>
+        <td class="cel-check" data-col="check"><input class="conf-check" type="checkbox" {{ 'checked' if r.conferida }} {{ 'disabled' if not pode_conferir }} onchange="salvar({{ r.id|tojson }}, this)">
+          <input class="dup-check" type="checkbox" {{ 'checked' if r.duplicada }} hidden></td>
+        <td class="cel-status" data-col="status"><span class="status" id="status-{{ r.id }}">ok</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="{{ 8 + dimensoes|length }}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
+{% block corpo_extra %}
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
+  <div class="modal">
+    <span class="close" onclick="fecharModal()">&times;</span>
+    <h3>Detalhes do lançamento</h3>
+    <div id="modalBody"></div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
+      <div style="font-size:13px;margin-bottom:6px">Natureza deste lançamento</div>
+      <select id="modalNatureza" onchange="salvarNaturezaModal()" style="width:100%;padding:7px 9px">
+        <option value="">Seguir a categoria</option>
+        {% for chave, rotulo in naturezas.items() %}
+          {% if chave != 'fluxo' %}<option value="{{ chave }}">{{ rotulo }}</option>{% endif %}
+        {% endfor %}
+      </select>
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
+        Use quando o lançamento foge do padrão da categoria — por exemplo um PIX que foi
+        a compra de um terreno ou veículo: não é despesa, é aquisição de bem.
+      </div>
+    </div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
+      <label style="display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()" style="width:15px;height:15px;accent-color:var(--accent)">
+        Marcar como duplicada
+      </label>
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
+        Lançamentos duplicados ficam riscados e não entram nos totais.
+      </div>
+    </div>
+    <div id="modalAcoes" style="margin-top:14px;display:none">
+      <button type="button" class="btn-perigo" onclick="excluirManual()" {{ 'disabled' if not pode_manual }}>Excluir lançamento</button>
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais ou importados de arquivo podem ser excluídos.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{# lancamentos.js le estes dois blocos em vez de receber o dado interpolado #}
+<script type="application/json" data-detalhes>{{ detalhes_json|safe }}</script>
+<script type="application/json" data-config>{{ config_json|safe }}</script>
+<script src="/static/lancamentos.js"></script>
+{% endblock %}

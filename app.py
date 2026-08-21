@@ -1194,39 +1194,42 @@ def index():
             return f'{c["label"]} - {nome_cartao_curto(final4)}'
         return c["label"]
 
-    def cat_options(selected):
-        return "".join(
-            f'<option value="{esc(c)}" {"selected" if c == selected else ""}>{cat_pt(c)}</option>'
-            for c in categorias
-        )
-
-    def dim_options(dimensao_id, selecionado):
-        opts = ['<option value="">(nao definido)</option>']
-        for v in valores_por_dim.get(dimensao_id, []):
-            sel = "selected" if selecionado == v["id"] else ""
-            opts.append(f'<option value="{v["id"]}" {sel}>{esc(v["nome"])}</option>')
-        return "".join(opts)
-
     # a tela nao deve oferecer acao que a API vai recusar
     pode_editar = pode("lancamentos_editar")
     pode_conferir = pode("lancamentos_conferir")
     pode_manual = pode("lancamentos_manual")
-    dis_editar = "" if pode_editar else " disabled"
-    dis_conferir = "" if pode_conferir else " disabled"
 
-    trs = []
+    def nome_cartao_curto(final4):
+        if not final4:
+            return "-"
+        prefixo = nomes_cartao.get(final4)
+        return prefixo if prefixo else f"final {final4}"
+
+    def origem_partes(account_id, final4=None):
+        """(selo_html, texto). O selo e HTML montado pelo app; o texto vem do
+        apelido do cartao, digitado pelo usuario, e o template escapa."""
+        c = contas_by_id.get(str(account_id))
+        if not c:
+            return "", "-"
+        if c["tipo"] == "CREDIT" and final4 and nomes_cartao.get(final4):
+            return c["selo"], nomes_cartao[final4]
+        return c["selo"], c["label_curto"]
+
+    def origem_completa(account_id, final4=None):
+        c = contas_by_id.get(str(account_id))
+        if not c:
+            return "-"
+        if c["tipo"] == "CREDIT" and final4:
+            return f'{c["label"]} - {nome_cartao_curto(final4)}'
+        return c["label"]
+
+    linhas_tabela = []
     detalhes_js = {}
     for r in rows:
-        checked = "checked" if r["conferida"] else ""
-        dup_checked = "checked" if r["duplicada"] else ""
-        classes = " ".join(c for c in ["conferida" if r["conferida"] else "", "duplicada" if r["duplicada"] else ""] if c)
         data_local = r["data_transacao"] - timedelta(hours=3)
-        data_fmt = data_local.strftime("%d/%m/%y<br>%H:%M")
         data_fmt_full = data_local.strftime("%d/%m/%Y %H:%M")
-        obs = esc(r["observacao"])
         rid = r["transacao_id"]
         desc = r["descricao"] or ""
-        desc_esc = esc(desc)
 
         conta_info = contas_by_id.get(str(r["account_id"]))
         # manual (dinheiro) ou importado de arquivo: pode ser excluido pelo modal
@@ -1243,42 +1246,47 @@ def index():
             valor_fmt = f'R$ {r["valor"]:,.2f}'
             valor_sort = r["valor"]
 
-        dim_tds = []
-        dim_detalhes = {}
-        for d in dimensoes:
-            valor_sel = mapa_dim_transacao.get((str(rid), d["id"]))
-            faltando = d["obrigatoria"] and not valor_sel
-            estilo = ' style="border-color:#c23c34;background:#fbeceb"' if faltando else ""
-            dim_tds.append(
-                f'<td class="cel-dim" data-col="dim_{d["id"]}"><select class="dim-select" data-dim="{d["id"]}"{estilo}{dis_editar} '
-                f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
-            )
-            nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
-            dim_detalhes[d["nome"]] = nomes_valor.get(valor_sel, "(nao definido)")
+        dims_sel = {d["id"]: mapa_dim_transacao.get((str(rid), d["id"])) for d in dimensoes}
+        selo, origem_texto = origem_partes(r["account_id"], r["numero_cartao_final"])
+        origem_full = origem_completa(r["account_id"], r["numero_cartao_final"])
 
-        trs.append(
-            f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
-            f'<td class="cel-data" data-col="data" data-tip="{data_fmt_full}" data-sort="{data_local.timestamp()}">{data_fmt}</td>'
-            f'<td class="cel-desc" data-col="desc" data-tip="{desc_esc}">{desc_esc}</td>'
-            f'<td class="cel-origem" data-col="origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
-            f'<td class="cel-dim" data-col="categoria"><select class="cat-select"{dis_editar} onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
-            + "".join(dim_tds) +
-            f'<td class="valor cel-valor" data-col="valor" style="{cor_valor}" data-sort="{valor_sort}">{valor_fmt}</td>'
-            f'<td class="cel-obs" data-col="obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..."{dis_editar} onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td class="cel-check" data-col="check"><input class="conf-check" type="checkbox" {checked}{dis_conferir} onchange="salvar(\'{rid}\', this)">'
-            f'<input class="dup-check" type="checkbox" {dup_checked} hidden></td>'
-            f'<td class="cel-status" data-col="status"><span class="status" id="status-{rid}">ok</span></td>'
-            f'</tr>'
-        )
+        linhas_tabela.append({
+            "id": str(rid),
+            "classes": " ".join(c for c in [
+                "conferida" if r["conferida"] else "",
+                "duplicada" if r["duplicada"] else "",
+            ] if c),
+            "data_dia": data_local.strftime("%d/%m/%y"),
+            "data_hora": data_local.strftime("%H:%M"),
+            "data_full": data_fmt_full,
+            "data_sort": data_local.timestamp(),
+            "descricao": desc,
+            "origem_selo": selo,
+            "origem_texto": origem_texto,
+            "origem_completa": origem_full,
+            "categoria": r["categoria"],
+            "dims": dims_sel,
+            "valor_fmt": valor_fmt,
+            "valor_sort": valor_sort,
+            "cor_valor": cor_valor,
+            "observacao": r["observacao"] or "",
+            "conferida": r["conferida"],
+            "duplicada": r["duplicada"],
+        })
+
+        nomes_por_dim = {
+            d["id"]: {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
+            for d in dimensoes
+        }
         detalhes = {
             "data": data_fmt_full,
             "descricao": desc,
-            "categoria": cat_pt(r["categoria"]),
+            "categoria": cat_pt_puro(r["categoria"]),
             "valor": valor_fmt,
             "valor_original": f'{r["valor_original"]:,.2f} {r["moeda_original"] or ""}' if r["valor_original"] is not None else "-",
             "status": r["status"] or "-",
             "tipo": r["tipo"] or "-",
-            "origem": origem_completa(r["account_id"], r["numero_cartao_final"]),
+            "origem": origem_full,
             "parcela": f'{r["parcela_atual"]}/{r["parcela_total"]}' if r["parcela_total"] and r["parcela_total"] > 1 else "À vista",
             "conferida": "Sim" if r["conferida"] else "Não",
             "conferida_por": r["conferida_por"] or "-",
@@ -1287,417 +1295,40 @@ def index():
             "_natureza": r["natureza"] or "",
             "_natureza_efetiva": NATUREZAS.get(r["natureza_efetiva"], r["natureza_efetiva"]),
         }
-        detalhes.update(dim_detalhes)
+        for d in dimensoes:
+            detalhes[d["nome"]] = nomes_por_dim[d["id"]].get(dims_sel[d["id"]], "(nao definido)")
         detalhes_js[str(rid)] = detalhes
 
-    total = resumo["total"] or 0
-    conf = resumo["conferidas"] or 0
     gasto_real = resumo["gasto_real"] or 0
     receita_mes = resumo["receita_mes"] or 0
-    resultado_mes = receita_mes - gasto_real
-    cor_resultado = "#1f8a53" if resultado_mes >= 0 else "#c23c34"
-    colspan_total = 8 + len(dimensoes)
-    body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th class="cel-dim" data-col="dim_{d["id"]}">{esc(d["nome"])}</th>' for d in dimensoes)
 
-    cat_rows_html = "".join(
-        f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
-        for c in por_categoria
-    ) or '<div class="cat-row"><span>Sem dados</span></div>'
-
-    origem_filtro_html = chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()")
-    categoria_options_manual = "".join(f'<option value="{esc(c)}">{cat_pt(c)}</option>' for c in categorias)
-    natureza_options = "".join(
-        f'<option value="{k}">{v}</option>' for k, v in NATUREZAS.items() if k != "fluxo"
+    return render_template(
+        "index.html",
+        titulo="Lançamentos",
+        topbar=topbar_html("Lançamentos", "inicio"),
+        mes=mes,
+        status=status,
+        hoje_iso=datetime.now().strftime("%Y-%m-%d"),
+        origem_filtro_html=chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()"),
+        pode_editar=pode_editar,
+        pode_conferir=pode_conferir,
+        pode_manual=pode_manual,
+        categorias=[{"chave": c, "nome": cat_pt_puro(c)} for c in categorias],
+        dimensoes=dimensoes,
+        valores_por_dim=valores_por_dim,
+        naturezas=NATUREZAS,
+        linhas=linhas_tabela,
+        por_categoria=[
+            {"nome": cat_pt_puro(c["categoria"]), "total": float(c["total"])} for c in por_categoria
+        ],
+        receita_mes=receita_mes,
+        gasto_real=gasto_real,
+        resultado_mes=receita_mes - gasto_real,
+        conf=resumo["conferidas"] or 0,
+        total=resumo["total"] or 0,
+        detalhes_json=json_script(detalhes_js),
+        config_json=json_script({"duplicada_obs": DUPLICADA_OBS_PADRAO}),
     )
-
-    return f"""
-    <html><head><title>Lançamentos · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Lançamentos', 'inicio')}
-      <div class="wrap">
-        <div class="filters" style="flex-wrap:wrap;gap:14px">
-          <div>
-            <label>Mes</label>
-            <div style="display:flex;align-items:center;gap:4px">
-              <button type="button" onclick="mudarMes(-1)" title="Mês anterior"
-                      style="padding:6px 12px;font-size:15px;line-height:1">‹</button>
-              <input type="month" id="mesInput" value="{mes}" onchange="aplicarFiltros()">
-              <button type="button" onclick="mudarMes(1)" title="Próximo mês"
-                      style="padding:6px 12px;font-size:15px;line-height:1">›</button>
-            </div>
-          </div>
-          <div>
-            <label>Status</label>
-            <select id="statusInput" onchange="aplicarFiltros()">
-              <option value="todas" {"selected" if status=="todas" else ""}>Todas</option>
-              <option value="pendente" {"selected" if status=="pendente" else ""}>Pendentes</option>
-              <option value="conferida" {"selected" if status=="conferida" else ""}>Conferidas</option>
-            </select>
-          </div>
-          {origem_filtro_html}
-          <div class="chips-sel" id="chipsSel"></div>
-          {'<div style="margin-left:auto"><button type="button" onclick="toggleFormManual()">+ Lançamento manual</button></div>' if pode_manual else ""}
-        </div>
-
-        <div id="formManual" class="cat-breakdown" style="display:none" {"hidden" if not pode_manual else ""}>
-          <h3>Novo lançamento manual (dinheiro)</h3>
-          <form onsubmit="return salvarManual(event)" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="date" id="manualData" required value="{datetime.now().strftime('%Y-%m-%d')}" style="padding:7px 9px;border:1px solid var(--line);border-radius:6px">
-            <input type="text" id="manualDescricao" placeholder="Descrição" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;flex:1;min-width:160px">
-            <select id="manualDirecao" style="padding:7px 9px">
-              <option value="saida">Saída</option>
-              <option value="entrada">Entrada</option>
-            </select>
-            <input type="number" id="manualValor" step="0.01" min="0.01" placeholder="Valor (R$)" required style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:130px">
-            <select id="manualCategoria" style="padding:7px 9px">{categoria_options_manual}</select>
-            <button type="submit">Adicionar</button>
-            <span id="manualStatus" style="font-size:12px;color:#888"></span>
-          </form>
-        </div>
-
-        <div class="cards">
-          <div class="card"><div class="label" title="Receitas do mês">Receitas do mês</div><div class="val" style="color:#1f8a53">R$ {receita_mes:,.2f}</div></div>
-          <div class="card"><div class="label" title="Despesas do mês">Despesas do mês</div><div class="val" style="color:#c23c34">R$ {gasto_real:,.2f}</div></div>
-          <div class="card"><div class="label" title="Resultado do mês (receitas menos despesas)">Resultado do mês</div><div class="val" style="color:{cor_resultado}">R$ {resultado_mes:,.2f}</div></div>
-          <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{conf} / {total}</div></div>
-        </div>
-
-        <details class="cat-breakdown">
-          <summary>Gasto por categoria (mês)</summary>
-          <div class="det-body">{cat_rows_html}</div>
-        </details>
-
-        <table class="compacta ajustavel" id="tabela-lancamentos" data-tabela="lancamentos">
-          <thead><tr>
-            <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">OK</th><th class="cel-status" data-col="status"></th>
-          </tr></thead>
-          <tbody>{body_rows}</tbody>
-        </table>
-      </div>
-
-      <div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
-        <div class="modal">
-          <span class="close" onclick="fecharModal()">&times;</span>
-          <h3>Detalhes do lançamento</h3>
-          <div id="modalBody"></div>
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-            <div style="font-size:13px;margin-bottom:6px">Natureza deste lançamento</div>
-            <select id="modalNatureza" onchange="salvarNaturezaModal()" style="width:100%;padding:7px 9px">
-              <option value="">Seguir a categoria</option>
-              {natureza_options}
-            </select>
-            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-              Use quando o lançamento foge do padrão da categoria — por exemplo um PIX que foi
-              a compra de um terreno ou veículo: não é despesa, é aquisição de bem.
-            </div>
-          </div>
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-            <label style="display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer">
-              <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()" style="width:15px;height:15px;accent-color:var(--accent)">
-              Marcar como duplicada
-            </label>
-            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-              Lançamentos duplicados ficam riscados e não entram nos totais.
-            </div>
-          </div>
-          <div id="modalAcoes" style="margin-top:14px;display:none">
-            <button type="button" class="btn-perigo" onclick="excluirManual()"{"" if pode_manual else " disabled"}>Excluir lançamento</button>
-            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:7px">Só lançamentos manuais ou importados de arquivo podem ser excluídos.</div>
-          </div>
-        </div>
-      </div>
-
-      <script>
-        // ---- chip filter (origem): filtra sem fechar o painel ----
-        function cfToggle(btn) {{
-          const panel = btn.nextElementSibling;
-          const abrir = !panel.classList.contains('show');
-          document.querySelectorAll('.chip-panel.show').forEach(p => {{ if (p !== panel) p.classList.remove('show'); }});
-          if (abrir) {{
-            panel.classList.add('show');
-            const search = panel.querySelector('.chip-search');
-            if (search) {{ search.value = ''; cfFiltrar(search); search.focus(); }}
-          }} else {{
-            panel.classList.remove('show');
-          }}
-        }}
-        document.addEventListener('click', function(e) {{
-          if (!e.target.closest('.chipfilter') && !e.target.closest('.chip-tag')) {{
-            document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
-          }}
-        }});
-        function cfClear(e, btn) {{
-          e.stopPropagation();
-          const panel = btn.closest('.chipfilter').querySelector('.chip-panel');
-          panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
-          aplicarFiltros();
-        }}
-        function cfFiltrar(input) {{
-          const panel = input.closest('.chip-panel');
-          const q = input.value.toLowerCase();
-          panel.querySelectorAll('.chip-opt').forEach(opt => {{
-            opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
-          }});
-          panel.querySelectorAll('.chip-hover').forEach(o => o.classList.remove('chip-hover'));
-        }}
-        function cfKeydown(e, input) {{
-          const panel = input.closest('.chip-panel');
-          const visiveis = Array.from(panel.querySelectorAll('.chip-opt')).filter(o => o.style.display !== 'none');
-          let idx = visiveis.findIndex(o => o.classList.contains('chip-hover'));
-          if (e.key === 'ArrowDown') {{
-            e.preventDefault();
-            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
-            idx = Math.min(idx + 1, visiveis.length - 1);
-            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
-          }} else if (e.key === 'ArrowUp') {{
-            e.preventDefault();
-            if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
-            idx = Math.max(idx - 1, 0);
-            if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
-          }} else if (e.key === 'Enter') {{
-            e.preventDefault();
-            if (idx >= 0) {{
-              const cb = visiveis[idx].querySelector('input[type=checkbox]');
-              cb.checked = !cb.checked;
-              aplicarFiltros();
-            }}
-          }} else if (e.key === 'Escape') {{
-            panel.classList.remove('show');
-          }}
-        }}
-
-        function atualizarChipLabels() {{
-          document.querySelectorAll('.chipfilter').forEach(cf => {{
-            const btn = cf.querySelector('.chip-btn');
-            const label = btn.dataset.label;
-            const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
-            btn.classList.toggle('ativo', n > 0);
-            btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
-              (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
-          }});
-          // chips pequenos ao lado mostrando o que esta selecionado
-          const cont = document.getElementById('chipsSel');
-          const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
-          cont.innerHTML = marcados.map(cb => {{
-            const lbl = cb.closest('.chip-opt');
-            const curto = lbl.dataset.curto || lbl.textContent.trim();
-            const completo = lbl.getAttribute('data-tip') || curto;
-            return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
-                   '<b onclick="desmarcarOrigem(\\'' + cb.value + '\\')">&times;</b></span>';
-          }}).join('');
-        }}
-        function desmarcarOrigem(valor) {{
-          const cb = document.querySelector('.chipfilter input[type=checkbox][value="' + valor + '"]');
-          if (cb) {{ cb.checked = false; aplicarFiltros(); }}
-        }}
-
-        // ---- aplica filtros via AJAX: o dropdown continua aberto ----
-        function coletarQuery() {{
-          const params = new URLSearchParams();
-          params.set('mes', document.getElementById('mesInput').value);
-          params.set('status', document.getElementById('statusInput').value);
-          document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
-          return params;
-        }}
-        // avanca/retrocede um mes no filtro. Usa Date pra virar o ano sozinho
-        // (dezembro -> janeiro do ano seguinte) em vez de somar no numero do mes.
-        function mudarMes(delta) {{
-          const campo = document.getElementById('mesInput');
-          const partes = (campo.value || '').split('-').map(Number);
-          if (partes.length !== 2 || !partes[0] || !partes[1]) return;
-          const d = new Date(partes[0], partes[1] - 1 + delta, 1);
-          campo.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-          aplicarFiltros();
-        }}
-        function aplicarFiltros() {{
-          atualizarChipLabels();
-          const params = coletarQuery();
-          history.replaceState(null, '', '/?' + params.toString());
-          fetch('/?' + params.toString(), {{ headers: {{ 'X-Parcial': '1' }} }})
-            .then(r => r.text())
-            .then(html => {{
-              const doc = new DOMParser().parseFromString(html, 'text/html');
-              const novaTabela = doc.querySelector('table.compacta');
-              const novosCards = doc.querySelector('.cards');
-              const novaCat = doc.querySelector('details.cat-breakdown');
-              if (novaTabela) {{
-                document.querySelector('table.compacta').replaceWith(novaTabela);
-                // a tabela nova veio do servidor sem os listeners nem as alcas de
-                // redimensionar (sao criados por JS) - replaceWith descarta o elemento
-                // antigo junto com tudo que estava anexado nele, entao precisa reativar
-                ativarTabelaAjustavel(novaTabela, 'lancamentos');
-              }}
-              if (novosCards) document.querySelector('.cards').replaceWith(novosCards);
-              const catAtual = document.querySelector('details.cat-breakdown');
-              if (novaCat && catAtual) {{
-                // preserva o estado aberto/fechado escolhido pelo usuario
-                novaCat.open = catAtual.open;
-                catAtual.replaceWith(novaCat);
-              }}
-              const scriptNovo = doc.querySelector('script[data-detalhes]');
-              if (scriptNovo) {{
-                try {{ window.detalhes = JSON.parse(scriptNovo.textContent); }} catch (e) {{}}
-              }}
-            }});
-        }}
-
-        window.detalhes = {json_script(detalhes_js)};
-        let idAtualModal = null;
-        function escHtml(s) {{
-          // escapa antes de jogar em innerHTML - descricao/observacao sao texto livre
-          // digitado pelo usuario (lancamento manual, importacao) e nao podem virar HTML/JS
-          return String(s ?? '').replace(/[&<>"']/g, c => ({{
-            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-          }})[c]);
-        }}
-        function verDetalhes(id) {{
-          const d = window.detalhes[id];
-          if (!d) return;
-          idAtualModal = id;
-          const labels = {{
-            data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
-            valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
-            parcela: 'Parcela', conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
-          }};
-          let html = '';
-          for (const k in labels) {{
-            html += '<div class="row"><span>' + labels[k] + '</span><span>' + escHtml(d[k]) + '</span></div>';
-          }}
-          for (const k in d) {{
-            if (!(k in labels) && k.charAt(0) !== '_') {{
-              html += '<div class="row"><span>' + escHtml(k) + '</span><span>' + escHtml(d[k]) + '</span></div>';
-            }}
-          }}
-          document.getElementById('modalBody').innerHTML = html;
-          document.getElementById('modalAcoes').style.display = d._manual ? 'block' : 'none';
-          // reflete o estado atual de "duplicada" da linha correspondente
-          const trAtual = document.querySelector('tr[data-id="' + id + '"]');
-          const dupAtual = trAtual ? trAtual.querySelector('.dup-check') : null;
-          document.getElementById('modalDup').checked = dupAtual ? dupAtual.checked : false;
-          const selNat = document.getElementById('modalNatureza');
-          selNat.options[0].textContent = 'Seguir a categoria (' + (d._natureza_efetiva || 'Despesa') + ')';
-          selNat.value = d._natureza || '';
-          document.getElementById('modalBg').classList.add('show');
-        }}
-        function salvarNaturezaModal() {{
-          if (!idAtualModal) return;
-          const nat = document.getElementById('modalNatureza').value;
-          const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
-          if (!tr) return;
-          if (window.detalhes[idAtualModal]) window.detalhes[idAtualModal]._natureza = nat;
-          salvar(idAtualModal, tr.querySelector('.cat-select'));
-          // a natureza muda os totais do mes, entao recarrega os numeros
-          setTimeout(() => window.location.reload(), 600);
-        }}
-        function toggleDuplicadaModal() {{
-          if (!idAtualModal) return;
-          const marcado = document.getElementById('modalDup').checked;
-          const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
-          if (!tr) return;
-          const dupCheck = tr.querySelector('.dup-check');
-          dupCheck.checked = marcado;
-          const obsInput = tr.querySelector('.obs-input');
-          if (marcado && !obsInput.value.trim()) {{
-            obsInput.value = DUPLICADA_OBS_PADRAO;
-          }}
-          salvar(idAtualModal, dupCheck);
-        }}
-        function fecharModal() {{
-          document.getElementById('modalBg').classList.remove('show');
-          idAtualModal = null;
-        }}
-        function excluirManual() {{
-          if (!idAtualModal) return;
-          const d = window.detalhes[idAtualModal] || {{}};
-          if (!confirm('Excluir definitivamente este lançamento manual?\\n\\n' + (d.descricao || '') + '  ' + (d.valor || ''))) return;
-          fetch('/api/lancamento-manual/' + idAtualModal, {{ method: 'DELETE' }})
-            .then(r => r.json())
-            .then(res => {{
-              if (res.ok) {{ fecharModal(); window.location.reload(); }}
-              else alert(res.erro || 'Não foi possível excluir.');
-            }});
-        }}
-        function linhaClick(e, id) {{
-          const tag = e.target.tagName;
-          if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
-          verDetalhes(id);
-        }}
-        const DUPLICADA_OBS_PADRAO = {json.dumps(DUPLICADA_OBS_PADRAO)};
-        const filaSalvar = {{}};
-        function salvar(id, el) {{
-          const tr = el.closest('tr');
-          const dimensoes = {{}};
-          tr.querySelectorAll('.dim-select').forEach(sel => {{
-            dimensoes[sel.dataset.dim] = sel.value || null;
-          }});
-          const payload = {{
-            conferida: tr.querySelector('.conf-check').checked,
-            duplicada: tr.querySelector('.dup-check').checked,
-            observacao: tr.querySelector('.obs-input').value,
-            categoria: tr.querySelector('.cat-select').value,
-            natureza: (window.detalhes[id] || {{}})._natureza || '',
-            dimensoes: dimensoes
-          }};
-          const anterior = filaSalvar[id] || Promise.resolve();
-          const atual = anterior.then(() => fetch('/api/transacao/' + id, {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify(payload)
-          }})).then(r => r.json()).then(d => {{
-            if (d.ok) {{
-              const confFinal = payload.conferida && !d.bloqueada;
-              tr.querySelector('.conf-check').checked = confFinal;
-              tr.classList.toggle('conferida', confFinal);
-              tr.classList.toggle('duplicada', payload.duplicada);
-              tr.querySelectorAll('.dim-select').forEach(sel => {{
-                sel.style.borderColor = '';
-                sel.style.background = '';
-              }});
-              if (d.bloqueada) {{
-                (d.faltando || []).forEach(dimId => {{
-                  const sel = tr.querySelector('.dim-select[data-dim="' + dimId + '"]');
-                  if (sel) {{ sel.style.borderColor = '#c23c34'; sel.style.background = '#fbeceb'; }}
-                }});
-                alert('Nao foi possivel confirmar: preencha os campos obrigatorios destacados em vermelho.');
-              }}
-              const s = document.getElementById('status-' + id);
-              if (s) {{ s.classList.add('show'); setTimeout(() => s.classList.remove('show'), 1500); }}
-            }}
-          }});
-          filaSalvar[id] = atual;
-        }}
-        function toggleFormManual() {{
-          const f = document.getElementById('formManual');
-          f.style.display = f.style.display === 'none' ? 'block' : 'none';
-        }}
-        function salvarManual(e) {{
-          e.preventDefault();
-          const statusEl = document.getElementById('manualStatus');
-          statusEl.textContent = 'Salvando...';
-          const payload = {{
-            data: document.getElementById('manualData').value,
-            descricao: document.getElementById('manualDescricao').value,
-            direcao: document.getElementById('manualDirecao').value,
-            valor: document.getElementById('manualValor').value,
-            categoria: document.getElementById('manualCategoria').value
-          }};
-          fetch('/api/lancamento-manual', {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify(payload)
-          }}).then(r => r.json()).then(d => {{
-            if (d.ok) {{ window.location.reload(); }}
-            else {{ statusEl.textContent = d.erro || 'Falha ao salvar'; }}
-          }}).catch(() => {{ statusEl.textContent = 'Falha ao salvar'; }});
-          return false;
-        }}
-        atualizarChipLabels();
-
-      </script>
-      <script type="application/json" data-detalhes>{json_script(detalhes_js)}</script>
-    </body></html>
-    """
 
 
 @app.route("/api/lancamento-manual", methods=["POST"])

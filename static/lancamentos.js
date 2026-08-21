@@ -1,0 +1,290 @@
+// Tela de Lançamentos. Depende de tabelas.js (escHtml, ativarTabelaAjustavel),
+// carregado antes deste arquivo.
+//
+// Os dados que vinham interpolados pelo Python agora sao lidos de tags
+// <script type="application/json"> no HTML - foi o que permitiu este arquivo
+// virar estatico. lerJson() e a porta de entrada desses dados.
+function lerJson(seletor, padrao) {
+  const el = document.querySelector(seletor);
+  if (!el) return padrao;
+  try { return JSON.parse(el.textContent); } catch (e) { return padrao; }
+}
+
+// ---- chip filter (origem): filtra sem fechar o painel ----
+function cfToggle(btn) {
+  const panel = btn.nextElementSibling;
+  const abrir = !panel.classList.contains('show');
+  document.querySelectorAll('.chip-panel.show').forEach(p => { if (p !== panel) p.classList.remove('show'); });
+  if (abrir) {
+    panel.classList.add('show');
+    const search = panel.querySelector('.chip-search');
+    if (search) { search.value = ''; cfFiltrar(search); search.focus(); }
+  } else {
+    panel.classList.remove('show');
+  }
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.chipfilter') && !e.target.closest('.chip-tag')) {
+    document.querySelectorAll('.chip-panel.show').forEach(p => p.classList.remove('show'));
+  }
+});
+function cfClear(e, btn) {
+  e.stopPropagation();
+  const panel = btn.closest('.chipfilter').querySelector('.chip-panel');
+  panel.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
+  aplicarFiltros();
+}
+function cfFiltrar(input) {
+  const panel = input.closest('.chip-panel');
+  const q = input.value.toLowerCase();
+  panel.querySelectorAll('.chip-opt').forEach(opt => {
+    opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+  });
+  panel.querySelectorAll('.chip-hover').forEach(o => o.classList.remove('chip-hover'));
+}
+function cfKeydown(e, input) {
+  const panel = input.closest('.chip-panel');
+  const visiveis = Array.from(panel.querySelectorAll('.chip-opt')).filter(o => o.style.display !== 'none');
+  let idx = visiveis.findIndex(o => o.classList.contains('chip-hover'));
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+    idx = Math.min(idx + 1, visiveis.length - 1);
+    if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (idx >= 0) visiveis[idx].classList.remove('chip-hover');
+    idx = Math.max(idx - 1, 0);
+    if (visiveis[idx]) visiveis[idx].classList.add('chip-hover');
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (idx >= 0) {
+      const cb = visiveis[idx].querySelector('input[type=checkbox]');
+      cb.checked = !cb.checked;
+      aplicarFiltros();
+    }
+  } else if (e.key === 'Escape') {
+    panel.classList.remove('show');
+  }
+}
+
+function atualizarChipLabels() {
+  document.querySelectorAll('.chipfilter').forEach(cf => {
+    const btn = cf.querySelector('.chip-btn');
+    const label = btn.dataset.label;
+    const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
+    btn.classList.toggle('ativo', n > 0);
+    btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
+      (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
+  });
+  // chips pequenos ao lado mostrando o que esta selecionado
+  const cont = document.getElementById('chipsSel');
+  const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+  cont.innerHTML = marcados.map(cb => {
+    const lbl = cb.closest('.chip-opt');
+    const curto = lbl.dataset.curto || lbl.textContent.trim();
+    const completo = lbl.getAttribute('data-tip') || curto;
+    return '<span class="chip-tag" title="' + completo + '"><span>' + curto + '</span>' +
+           '<b onclick="desmarcarOrigem(\'' + cb.value + '\')">&times;</b></span>';
+  }).join('');
+}
+function desmarcarOrigem(valor) {
+  const cb = document.querySelector('.chipfilter input[type=checkbox][value="' + valor + '"]');
+  if (cb) { cb.checked = false; aplicarFiltros(); }
+}
+
+// ---- aplica filtros via AJAX: o dropdown continua aberto ----
+function coletarQuery() {
+  const params = new URLSearchParams();
+  params.set('mes', document.getElementById('mesInput').value);
+  params.set('status', document.getElementById('statusInput').value);
+  document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
+  return params;
+}
+// avanca/retrocede um mes no filtro. Usa Date pra virar o ano sozinho
+// (dezembro -> janeiro do ano seguinte) em vez de somar no numero do mes.
+function mudarMes(delta) {
+  const campo = document.getElementById('mesInput');
+  const partes = (campo.value || '').split('-').map(Number);
+  if (partes.length !== 2 || !partes[0] || !partes[1]) return;
+  const d = new Date(partes[0], partes[1] - 1 + delta, 1);
+  campo.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  aplicarFiltros();
+}
+function aplicarFiltros() {
+  atualizarChipLabels();
+  const params = coletarQuery();
+  history.replaceState(null, '', '/?' + params.toString());
+  fetch('/?' + params.toString(), { headers: { 'X-Parcial': '1' } })
+    .then(r => r.text())
+    .then(html => {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const novaTabela = doc.querySelector('table.compacta');
+      const novosCards = doc.querySelector('.cards');
+      const novaCat = doc.querySelector('details.cat-breakdown');
+      if (novaTabela) {
+        document.querySelector('table.compacta').replaceWith(novaTabela);
+        // a tabela nova veio do servidor sem os listeners nem as alcas de
+        // redimensionar (sao criados por JS) - replaceWith descarta o elemento
+        // antigo junto com tudo que estava anexado nele, entao precisa reativar
+        ativarTabelaAjustavel(novaTabela, 'lancamentos');
+      }
+      if (novosCards) document.querySelector('.cards').replaceWith(novosCards);
+      const catAtual = document.querySelector('details.cat-breakdown');
+      if (novaCat && catAtual) {
+        // preserva o estado aberto/fechado escolhido pelo usuario
+        novaCat.open = catAtual.open;
+        catAtual.replaceWith(novaCat);
+      }
+      const scriptNovo = doc.querySelector('script[data-detalhes]');
+      if (scriptNovo) {
+        try { window.detalhes = JSON.parse(scriptNovo.textContent); } catch (e) {}
+      }
+    });
+}
+
+window.detalhes = lerJson('script[data-detalhes]', {});
+let idAtualModal = null;
+
+function verDetalhes(id) {
+  const d = window.detalhes[id];
+  if (!d) return;
+  idAtualModal = id;
+  const labels = {
+    data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
+    valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
+    parcela: 'Parcela', conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
+  };
+  let html = '';
+  for (const k in labels) {
+    html += '<div class="row"><span>' + labels[k] + '</span><span>' + escHtml(d[k]) + '</span></div>';
+  }
+  for (const k in d) {
+    if (!(k in labels) && k.charAt(0) !== '_') {
+      html += '<div class="row"><span>' + escHtml(k) + '</span><span>' + escHtml(d[k]) + '</span></div>';
+    }
+  }
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalAcoes').style.display = d._manual ? 'block' : 'none';
+  // reflete o estado atual de "duplicada" da linha correspondente
+  const trAtual = document.querySelector('tr[data-id="' + id + '"]');
+  const dupAtual = trAtual ? trAtual.querySelector('.dup-check') : null;
+  document.getElementById('modalDup').checked = dupAtual ? dupAtual.checked : false;
+  const selNat = document.getElementById('modalNatureza');
+  selNat.options[0].textContent = 'Seguir a categoria (' + (d._natureza_efetiva || 'Despesa') + ')';
+  selNat.value = d._natureza || '';
+  document.getElementById('modalBg').classList.add('show');
+}
+function salvarNaturezaModal() {
+  if (!idAtualModal) return;
+  const nat = document.getElementById('modalNatureza').value;
+  const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
+  if (!tr) return;
+  if (window.detalhes[idAtualModal]) window.detalhes[idAtualModal]._natureza = nat;
+  salvar(idAtualModal, tr.querySelector('.cat-select'));
+  // a natureza muda os totais do mes, entao recarrega os numeros
+  setTimeout(() => window.location.reload(), 600);
+}
+function toggleDuplicadaModal() {
+  if (!idAtualModal) return;
+  const marcado = document.getElementById('modalDup').checked;
+  const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
+  if (!tr) return;
+  const dupCheck = tr.querySelector('.dup-check');
+  dupCheck.checked = marcado;
+  const obsInput = tr.querySelector('.obs-input');
+  if (marcado && !obsInput.value.trim()) {
+    obsInput.value = DUPLICADA_OBS_PADRAO;
+  }
+  salvar(idAtualModal, dupCheck);
+}
+function fecharModal() {
+  document.getElementById('modalBg').classList.remove('show');
+  idAtualModal = null;
+}
+function excluirManual() {
+  if (!idAtualModal) return;
+  const d = window.detalhes[idAtualModal] || {};
+  if (!confirm('Excluir definitivamente este lançamento manual?\n\n' + (d.descricao || '') + '  ' + (d.valor || ''))) return;
+  fetch('/api/lancamento-manual/' + idAtualModal, { method: 'DELETE' })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) { fecharModal(); window.location.reload(); }
+      else alert(res.erro || 'Não foi possível excluir.');
+    });
+}
+function linhaClick(e, id) {
+  const tag = e.target.tagName;
+  if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
+  verDetalhes(id);
+}
+const DUPLICADA_OBS_PADRAO = lerJson('script[data-config]', {}).duplicada_obs || '';
+const filaSalvar = {};
+function salvar(id, el) {
+  const tr = el.closest('tr');
+  const dimensoes = {};
+  tr.querySelectorAll('.dim-select').forEach(sel => {
+    dimensoes[sel.dataset.dim] = sel.value || null;
+  });
+  const payload = {
+    conferida: tr.querySelector('.conf-check').checked,
+    duplicada: tr.querySelector('.dup-check').checked,
+    observacao: tr.querySelector('.obs-input').value,
+    categoria: tr.querySelector('.cat-select').value,
+    natureza: (window.detalhes[id] || {})._natureza || '',
+    dimensoes: dimensoes
+  };
+  const anterior = filaSalvar[id] || Promise.resolve();
+  const atual = anterior.then(() => fetch('/api/transacao/' + id, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })).then(r => r.json()).then(d => {
+    if (d.ok) {
+      const confFinal = payload.conferida && !d.bloqueada;
+      tr.querySelector('.conf-check').checked = confFinal;
+      tr.classList.toggle('conferida', confFinal);
+      tr.classList.toggle('duplicada', payload.duplicada);
+      tr.querySelectorAll('.dim-select').forEach(sel => {
+        sel.style.borderColor = '';
+        sel.style.background = '';
+      });
+      if (d.bloqueada) {
+        (d.faltando || []).forEach(dimId => {
+          const sel = tr.querySelector('.dim-select[data-dim="' + dimId + '"]');
+          if (sel) { sel.style.borderColor = '#c23c34'; sel.style.background = '#fbeceb'; }
+        });
+        alert('Nao foi possivel confirmar: preencha os campos obrigatorios destacados em vermelho.');
+      }
+      const s = document.getElementById('status-' + id);
+      if (s) { s.classList.add('show'); setTimeout(() => s.classList.remove('show'), 1500); }
+    }
+  });
+  filaSalvar[id] = atual;
+}
+function toggleFormManual() {
+  const f = document.getElementById('formManual');
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+function salvarManual(e) {
+  e.preventDefault();
+  const statusEl = document.getElementById('manualStatus');
+  statusEl.textContent = 'Salvando...';
+  const payload = {
+    data: document.getElementById('manualData').value,
+    descricao: document.getElementById('manualDescricao').value,
+    direcao: document.getElementById('manualDirecao').value,
+    valor: document.getElementById('manualValor').value,
+    categoria: document.getElementById('manualCategoria').value
+  };
+  fetch('/api/lancamento-manual', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r => r.json()).then(d => {
+    if (d.ok) { window.location.reload(); }
+    else { statusEl.textContent = d.erro || 'Falha ao salvar'; }
+  }).catch(() => { statusEl.textContent = 'Falha ao salvar'; });
+  return false;
+}
+atualizarChipLabels();

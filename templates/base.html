@@ -28,6 +28,8 @@
       {% if erro %}<div class="aviso-erro">{{ erro }}</div>{% endif %}
       {% block conteudo %}{% endblock %}
     </div>
+    {# fora do .wrap: modais e overlays, que precisam cobrir a tela inteira #}
+    {% block corpo_extra %}{% endblock %}
   {% endblock %}
   {% block scripts %}{% endblock %}
 </body>
