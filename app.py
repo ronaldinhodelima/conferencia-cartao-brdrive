@@ -1207,6 +1207,8 @@ BASE_CSS = BASE_CSS_HEAD + """
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   table.ajustavel th[data-col]:active { cursor: grabbing; }
+  /* sem reordenar/ordenar o cursor de arrastar enganaria - volta ao padrao */
+  table.ajustavel[data-sem-reordenar][data-sem-ordenar] th[data-col] { cursor: default; }
   table.ajustavel th[data-col].arrastando { opacity: .4; }
   table.ajustavel th[data-col].arrastar-sobre { box-shadow: inset 2px 0 0 var(--accent); }
   /* divisor entre colunas - sempre visivel, destaca no hover pra indicar que da pra arrastar */
@@ -1406,6 +1408,227 @@ BASE_CSS = BASE_CSS_HEAD + """
   .sync-btn:hover { border-color: var(--ink-faint); color: var(--ink); }
   .sync-btn:disabled { opacity: .6; cursor: default; }
 </style>
+<script>
+// ---------- colunas ajustaveis (compartilhado por todas as telas) ----------
+// Marque a tabela com class="ajustavel" e data-tabela="chave-unica" que o resto
+// e automatico: as colunas ganham data-col por indice (se ainda nao tiverem),
+// o botao "Redefinir colunas" e injetado acima da tabela e as preferencias de
+// ordem/largura/ordenacao ficam no localStorage por chave.
+// Opcional: data-sem-ordenar / data-sem-reordenar para tabelas hierarquicas
+// (linhas com colspan), onde ordenar ou trocar colunas de lugar nao faz sentido.
+function redefinirColunas(chave) {
+  localStorage.removeItem('pedemeia_tabela_' + chave);
+  window.location.reload();
+}
+
+function ativarTabelaAjustavel(table, chave, opcoes) {
+  if (!table) return;
+  opcoes = opcoes || {};
+  const podeOrdenar = !opcoes.semOrdenar && !table.hasAttribute('data-sem-ordenar');
+  const podeReordenar = !opcoes.semReordenar && !table.hasAttribute('data-sem-reordenar');
+  const thead = table.querySelector('thead tr');
+  if (!thead) return;
+  const CHAVE = 'pedemeia_tabela_' + chave;
+
+  // 1) garante data-col em todo th/td (por indice, quando o HTML nao trouxe).
+  // Roda antes de aplicar a ordem salva, entao o DOM ainda esta na ordem do servidor.
+  const thsOriginais = [...thead.children];
+  thsOriginais.forEach((th, i) => { if (!th.dataset.col) th.dataset.col = 'c' + i; });
+  const ordemOriginal = thsOriginais.map(th => th.dataset.col);
+  table.querySelectorAll('tbody tr').forEach(tr => {
+    const tds = [...tr.children];
+    // linha com colspan (ex: cabecalho de grupo) tem contagem diferente - fica de fora
+    if (tds.length !== thsOriginais.length) return;
+    tds.forEach((td, i) => { if (!td.dataset.col) td.dataset.col = ordemOriginal[i]; });
+  });
+
+  let estado;
+  try { estado = JSON.parse(localStorage.getItem(CHAVE) || '{}'); } catch (e) { estado = {}; }
+  function salvarEstado() { localStorage.setItem(CHAVE, JSON.stringify(estado)); }
+  function colunasNaOrdemAtual() {
+    return [...thead.querySelectorAll('th[data-col]')].map(th => th.dataset.col);
+  }
+  function aplicarLargura(col, px) {
+    const th = thead.querySelector('th[data-col="' + col + '"]');
+    if (th) th.style.width = px + 'px';
+    table.querySelectorAll('td[data-col="' + col + '"]').forEach(td => { td.style.width = px + 'px'; });
+  }
+  function reordenarLinhas() {
+    const ordem = colunasNaOrdemAtual();
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      const mapaTd = {};
+      tr.querySelectorAll('td[data-col]').forEach(td => { mapaTd[td.dataset.col] = td; });
+      ordem.forEach(col => { if (mapaTd[col]) tr.appendChild(mapaTd[col]); });
+    });
+  }
+
+  // 2) botao "Redefinir colunas" injetado automaticamente (uma vez por tabela)
+  if (!table.previousElementSibling || !table.previousElementSibling.classList.contains('barra-colunas')) {
+    const barra = document.createElement('div');
+    barra.className = 'barra-colunas';
+    barra.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ver-btn';
+    btn.title = 'Volta a ordem, largura e ordenação das colunas ao padrão';
+    btn.textContent = '↺ Redefinir colunas';
+    btn.addEventListener('click', function () { redefinirColunas(chave); });
+    barra.appendChild(btn);
+    table.parentNode.insertBefore(barra, table);
+  }
+
+  // 3) ordem salva
+  if (podeReordenar && estado.ordem && estado.ordem.length) {
+    const mapaTh = {};
+    thead.querySelectorAll('th[data-col]').forEach(th => { mapaTh[th.dataset.col] = th; });
+    estado.ordem.forEach(col => { if (mapaTh[col]) thead.appendChild(mapaTh[col]); });
+    reordenarLinhas();
+  }
+
+  // 4) larguras normalizadas para caber exatamente no container (sem rolagem).
+  // Medir a propria tabela nao serve: com table-layout:fixed ela ja estoura pra
+  // caber a soma das colunas, entao o alvo sairia errado. O pai nao estoura.
+  const larguraBase = {};
+  thead.querySelectorAll('th[data-col]').forEach(th => {
+    larguraBase[th.dataset.col] = (estado.larguras && estado.larguras[th.dataset.col]) || th.getBoundingClientRect().width;
+  });
+  const soma = Object.values(larguraBase).reduce((a, b) => a + b, 0);
+  const alvo = table.parentElement.clientWidth;
+  if (soma > 0 && alvo > 0) {
+    const fator = alvo / soma;
+    Object.keys(larguraBase).forEach(col => aplicarLargura(col, Math.max(40, larguraBase[col] * fator)));
+  }
+
+  // 5) redimensionar: arrastar tira/da espaco da coluna vizinha (soma constante)
+  let redimensionandoAgora = false;
+  thead.querySelectorAll('th[data-col]').forEach(th => {
+    if (th.querySelector('.col-resize-handle')) return;
+    const alca = document.createElement('span');
+    alca.className = 'col-resize-handle';
+    alca.draggable = false;
+    th.appendChild(alca);
+    alca.addEventListener('click', function (e) { e.stopPropagation(); });
+    alca.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const thVizinho = th.nextElementSibling;
+      if (!thVizinho || !thVizinho.dataset.col) return;
+      redimensionandoAgora = true;
+      const startX = e.clientX;
+      const larguraInicial = th.getBoundingClientRect().width;
+      const larguraInicialVizinho = thVizinho.getBoundingClientRect().width;
+      function mover(e2) {
+        const delta = e2.clientX - startX;
+        const nova = larguraInicial + delta;
+        const novaVizinho = larguraInicialVizinho - delta;
+        if (nova < 40 || novaVizinho < 40) return;
+        aplicarLargura(th.dataset.col, nova);
+        aplicarLargura(thVizinho.dataset.col, novaVizinho);
+      }
+      function soltar() {
+        document.removeEventListener('mousemove', mover);
+        document.removeEventListener('mouseup', soltar);
+        estado.larguras = estado.larguras || {};
+        estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
+        estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
+        salvarEstado();
+        // rede de seguranca: normalmente a trava e consumida pelo handler de click
+        // do th (a alca se move junto com a coluna, entao o click pode cair fora dela)
+        setTimeout(function () { redimensionandoAgora = false; }, 300);
+      }
+      document.addEventListener('mousemove', mover);
+      document.addEventListener('mouseup', soltar);
+    });
+  });
+
+  // 6) reordenar arrastando o cabecalho
+  if (podeReordenar) {
+    let arrastando = null;
+    thead.querySelectorAll('th[data-col]').forEach(th => {
+      th.draggable = true;
+      th.addEventListener('dragstart', function () { arrastando = th; th.classList.add('arrastando'); });
+      th.addEventListener('dragend', function () {
+        th.classList.remove('arrastando');
+        thead.querySelectorAll('th[data-col]').forEach(t => t.classList.remove('arrastar-sobre'));
+      });
+      th.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        if (th !== arrastando) th.classList.add('arrastar-sobre');
+      });
+      th.addEventListener('dragleave', function () { th.classList.remove('arrastar-sobre'); });
+      th.addEventListener('drop', function (e) {
+        e.preventDefault();
+        th.classList.remove('arrastar-sobre');
+        if (!arrastando || arrastando === th) return;
+        const rect = th.getBoundingClientRect();
+        const antes = (e.clientX - rect.left) < rect.width / 2;
+        th.parentNode.insertBefore(arrastando, antes ? th : th.nextSibling);
+        reordenarLinhas();
+        estado.ordem = colunasNaOrdemAtual();
+        salvarEstado();
+      });
+    });
+  }
+
+  // 7) ordenar clicando no titulo
+  if (podeOrdenar) {
+    function valorOrdenavel(td) {
+      if (!td) return '';
+      if (td.dataset.sort !== undefined && td.dataset.sort !== '') return parseFloat(td.dataset.sort);
+      const sel = td.querySelector('select');
+      if (sel) return (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '').toLowerCase();
+      const inp = td.querySelector('input[type=text]');
+      if (inp) return inp.value.toLowerCase();
+      const txt = td.textContent.trim();
+      // numero em formato brasileiro (R$ 1.234,56 / -12,5%) ordena como numero
+      const limpo = txt.replace(/[R$\s%]/g, '').replace(/\./g, '').replace(',', '.');
+      if (limpo !== '' && !isNaN(Number(limpo))) return Number(limpo);
+      return txt.toLowerCase();
+    }
+    function ordenarLinhas(col, dir) {
+      const tbody = table.querySelector('tbody');
+      if (!tbody) return;
+      const linhas = [...tbody.querySelectorAll('tr')];
+      linhas.sort(function (a, b) {
+        const va = valorOrdenavel(a.querySelector('td[data-col="' + col + '"]'));
+        const vb = valorOrdenavel(b.querySelector('td[data-col="' + col + '"]'));
+        const cmp = (typeof va === 'number' && typeof vb === 'number') ? va - vb : String(va).localeCompare(String(vb));
+        return dir === 'asc' ? cmp : -cmp;
+      });
+      linhas.forEach(tr => tbody.appendChild(tr));
+    }
+    function atualizarIndicadores() {
+      thead.querySelectorAll('th[data-col]').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (estado.sort && estado.sort.col === th.dataset.col) {
+          th.classList.add(estado.sort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+      });
+    }
+    thead.querySelectorAll('th[data-col]').forEach(th => {
+      th.addEventListener('click', function (e) {
+        if (redimensionandoAgora) { redimensionandoAgora = false; return; }
+        if (e.target.classList.contains('col-resize-handle')) return;
+        const col = th.dataset.col;
+        const dir = (estado.sort && estado.sort.col === col && estado.sort.dir === 'asc') ? 'desc' : 'asc';
+        estado.sort = { col: col, dir: dir };
+        salvarEstado();
+        ordenarLinhas(col, dir);
+        atualizarIndicadores();
+      });
+    });
+    if (estado.sort) ordenarLinhas(estado.sort.col, estado.sort.dir);
+    atualizarIndicadores();
+  }
+}
+
+// ativa sozinho toda tabela marcada com class="ajustavel" e data-tabela="chave"
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('table.ajustavel[data-tabela]').forEach(function (t) {
+    ativarTabelaAjustavel(t, t.dataset.tabela);
+  });
+});
+</script>
 """
 
 
@@ -1961,11 +2184,7 @@ def index():
           <div class="det-body">{cat_rows_html}</div>
         </details>
 
-        <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
-          <button type="button" class="ver-btn" onclick="redefinirColunas('lancamentos')"
-                  title="Volta a ordem, largura e ordenação das colunas ao padrão">↺ Redefinir colunas</button>
-        </div>
-        <table class="compacta ajustavel" id="tabela-lancamentos">
+        <table class="compacta ajustavel" id="tabela-lancamentos" data-tabela="lancamentos">
           <thead><tr>
             <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">OK</th><th class="cel-status" data-col="status"></th>
           </tr></thead>
@@ -2281,202 +2500,6 @@ def index():
         }}
         atualizarChipLabels();
 
-        // ---- colunas ajustaveis: redimensionar, reordenar, ordenar por clique ----
-        // Preferencias (ordem, largura, ordenacao) ficam salvas no navegador (localStorage),
-        // por tabela - cada tela chama ativarTabelaAjustavel com sua propria chave.
-        function redefinirColunas(chave) {{
-          localStorage.removeItem('pedemeia_tabela_' + chave);
-          window.location.reload();
-        }}
-        function ativarTabelaAjustavel(table, chave) {{
-          const thead = table.querySelector('thead tr');
-          const CHAVE = 'pedemeia_tabela_' + chave;
-          // trava pra impedir que soltar o mouse depois de redimensionar dispare ordenacao.
-          // a alca se move junto com a coluna enquanto arrasta, entao no momento de soltar
-          // o clique pode acabar caindo em outro elemento - por isso a trava e checada no
-          // handler do th (o que realmente importa), nao so via stopPropagation na alca.
-          let redimensionandoAgora = false;
-
-          function estadoSalvo() {{
-            try {{ return JSON.parse(localStorage.getItem(CHAVE) || '{{}}'); }} catch (e) {{ return {{}}; }}
-          }}
-          const estado = estadoSalvo();
-
-          function colunasNaOrdemAtual() {{
-            return [...thead.querySelectorAll('th[data-col]')].map(th => th.dataset.col);
-          }}
-          function salvarEstado() {{ localStorage.setItem(CHAVE, JSON.stringify(estado)); }}
-
-          function aplicarLargura(col, px) {{
-            const th = thead.querySelector('th[data-col="' + col + '"]');
-            if (th) th.style.width = px + 'px';
-            table.querySelectorAll('td[data-col="' + col + '"]').forEach(td => {{ td.style.width = px + 'px'; }});
-          }}
-
-          function reordenarLinhas() {{
-            const ordem = colunasNaOrdemAtual();
-            table.querySelectorAll('tbody tr').forEach(tr => {{
-              const mapaTd = {{}};
-              tr.querySelectorAll('td[data-col]').forEach(td => {{ mapaTd[td.dataset.col] = td; }});
-              ordem.forEach(col => {{ if (mapaTd[col]) tr.appendChild(mapaTd[col]); }});
-            }});
-          }}
-
-          // ordem salva
-          if (estado.ordem && estado.ordem.length) {{
-            const mapaTh = {{}};
-            thead.querySelectorAll('th[data-col]').forEach(th => {{ mapaTh[th.dataset.col] = th; }});
-            estado.ordem.forEach(col => {{ if (mapaTh[col]) thead.appendChild(mapaTh[col]); }});
-            reordenarLinhas();
-          }}
-
-          // sem rolagem: a soma das larguras tem que bater exatamente com a largura
-          // da tabela (100% do container) - normaliza tanto a largura salva quanto a
-          // padrao proporcionalmente, senao o navegador estoura a tabela pra caber
-          // a soma das colunas (e volta a rolagem que queremos evitar).
-          function normalizarParaCaber(larguras) {{
-            const soma = Object.values(larguras).reduce((a, b) => a + b, 0);
-            // NUNCA medir table.getBoundingClientRect() aqui: se a soma das larguras
-            // declaradas passar do espaco disponivel, a tabela already fica mais larga
-            // que o container (table-layout:fixed estoura pra caber as colunas) e a
-            // "largura da tabela" mediria esse valor ja errado, sem nunca corrigir.
-            // O pai (.wrap) nao estoura, entao ele sim reflete o espaco real disponivel.
-            const alvo = table.parentElement.clientWidth;
-            if (soma <= 0 || alvo <= 0) return larguras;
-            const fator = alvo / soma;
-            const normalizado = {{}};
-            Object.keys(larguras).forEach(c => {{ normalizado[c] = Math.max(40, larguras[c] * fator); }});
-            return normalizado;
-          }}
-          const larguraBase = {{}};
-          thead.querySelectorAll('th[data-col]').forEach(th => {{
-            larguraBase[th.dataset.col] = (estado.larguras && estado.larguras[th.dataset.col]) || th.getBoundingClientRect().width;
-          }});
-          const larguraFinal = normalizarParaCaber(larguraBase);
-          Object.keys(larguraFinal).forEach(col => aplicarLargura(col, larguraFinal[col]));
-
-          // redimensionar: alca na borda direita de cada th - arrastar tira/da espaco
-          // da coluna vizinha (a soma nunca muda, entao a tabela nunca estoura)
-          thead.querySelectorAll('th[data-col]').forEach(th => {{
-            const alca = document.createElement('span');
-            alca.className = 'col-resize-handle';
-            alca.draggable = false;
-            th.appendChild(alca);
-            // sem isso, o clique de soltar o mouse depois de redimensionar tambem
-            alca.addEventListener('click', function (e) {{ e.stopPropagation(); }});
-            alca.addEventListener('mousedown', function (e) {{
-              e.preventDefault();
-              e.stopPropagation();
-              const thVizinho = th.nextElementSibling;
-              if (!thVizinho || !thVizinho.dataset.col) return;
-              redimensionandoAgora = true;
-              const startX = e.clientX;
-              const startWidth = th.getBoundingClientRect().width;
-              const startWidthVizinho = thVizinho.getBoundingClientRect().width;
-              function mover(e2) {{
-                const delta = e2.clientX - startX;
-                const novaAtual = startWidth + delta;
-                const novaVizinho = startWidthVizinho - delta;
-                if (novaAtual < 40 || novaVizinho < 40) return;
-                aplicarLargura(th.dataset.col, novaAtual);
-                aplicarLargura(thVizinho.dataset.col, novaVizinho);
-              }}
-              function soltar() {{
-                document.removeEventListener('mousemove', mover);
-                document.removeEventListener('mouseup', soltar);
-                estado.larguras = estado.larguras || {{}};
-                estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
-                estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
-                salvarEstado();
-                // rede de seguranca: se por algum motivo nenhum "click" vier depois (caso
-                // comum em arraste real), destrava sozinho depois de um tempo generoso.
-                // O caminho normal e o handler de click do th consumir a trava na hora.
-                setTimeout(function () {{ redimensionandoAgora = false; }}, 300);
-              }}
-              document.addEventListener('mousemove', mover);
-              document.addEventListener('mouseup', soltar);
-            }});
-          }});
-
-          // reordenar: arrastar o cabecalho pra esquerda/direita
-          let arrastando = null;
-          thead.querySelectorAll('th[data-col]').forEach(th => {{
-            th.draggable = true;
-            th.addEventListener('dragstart', function () {{
-              arrastando = th;
-              th.classList.add('arrastando');
-            }});
-            th.addEventListener('dragend', function () {{
-              th.classList.remove('arrastando');
-              thead.querySelectorAll('th[data-col]').forEach(t => t.classList.remove('arrastar-sobre'));
-            }});
-            th.addEventListener('dragover', function (e) {{
-              e.preventDefault();
-              if (th !== arrastando) th.classList.add('arrastar-sobre');
-            }});
-            th.addEventListener('dragleave', function () {{ th.classList.remove('arrastar-sobre'); }});
-            th.addEventListener('drop', function (e) {{
-              e.preventDefault();
-              th.classList.remove('arrastar-sobre');
-              if (!arrastando || arrastando === th) return;
-              const rect = th.getBoundingClientRect();
-              const antes = (e.clientX - rect.left) < rect.width / 2;
-              th.parentNode.insertBefore(arrastando, antes ? th : th.nextSibling);
-              reordenarLinhas();
-              estado.ordem = colunasNaOrdemAtual();
-              salvarEstado();
-            }});
-          }});
-
-          // ordenar: clicar no titulo da coluna (nao na alca de redimensionar)
-          function valorOrdenavel(td) {{
-            if (!td) return '';
-            if (td.dataset.sort !== undefined && td.dataset.sort !== '') return parseFloat(td.dataset.sort);
-            const sel = td.querySelector('select');
-            if (sel) return (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '').toLowerCase();
-            const inp = td.querySelector('input[type=text]');
-            if (inp) return inp.value.toLowerCase();
-            return td.textContent.trim().toLowerCase();
-          }}
-          function ordenarLinhas(col, dir) {{
-            const tbody = table.querySelector('tbody');
-            const linhas = [...tbody.querySelectorAll('tr')];
-            linhas.sort(function (a, b) {{
-              const va = valorOrdenavel(a.querySelector('td[data-col="' + col + '"]'));
-              const vb = valorOrdenavel(b.querySelector('td[data-col="' + col + '"]'));
-              const cmp = (typeof va === 'number' && typeof vb === 'number') ? va - vb : String(va).localeCompare(String(vb));
-              return dir === 'asc' ? cmp : -cmp;
-            }});
-            linhas.forEach(tr => tbody.appendChild(tr));
-          }}
-          function atualizarIndicadores() {{
-            thead.querySelectorAll('th[data-col]').forEach(th => {{
-              th.classList.remove('sort-asc', 'sort-desc');
-              if (estado.sort && estado.sort.col === th.dataset.col) {{
-                th.classList.add(estado.sort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
-              }}
-            }});
-          }}
-          thead.querySelectorAll('th[data-col]').forEach(th => {{
-            th.addEventListener('click', function (e) {{
-              if (redimensionandoAgora) {{ redimensionandoAgora = false; return; }}
-              if (e.target.classList.contains('col-resize-handle')) return;
-              const col = th.dataset.col;
-              const dir = (estado.sort && estado.sort.col === col && estado.sort.dir === 'asc') ? 'desc' : 'asc';
-              estado.sort = {{ col: col, dir: dir }};
-              salvarEstado();
-              ordenarLinhas(col, dir);
-              atualizarIndicadores();
-            }});
-          }});
-
-          // ordenacao salva de uma sessao anterior
-          if (estado.sort) {{
-            ordenarLinhas(estado.sort.col, estado.sort.dir);
-          }}
-          atualizarIndicadores();
-        }}
-        ativarTabelaAjustavel(document.getElementById('tabela-lancamentos'), 'lancamentos');
       </script>
       <script type="application/json" data-detalhes>{json_script(detalhes_js)}</script>
     </body></html>
@@ -3320,7 +3343,7 @@ def dre():
             aparecem na última coluna. Já os juros e tarifas <strong>são despesa</strong>, porque o dinheiro sai e não volta.
           </div>
           <div class="tabela-scroll">
-          <table class="compacta">
+          <table class="compacta ajustavel" data-tabela="dre-mensal">
             <thead><tr>
               <th>Mês</th>
               <th style="text-align:right">Receitas</th>
@@ -3571,7 +3594,7 @@ def grupos_view():
             pra vincular mais uma.
           </div>
           <div class="tabela-scroll">
-          <table class="compacta">
+          <table class="compacta ajustavel" data-tabela="centro-custos" data-sem-ordenar data-sem-reordenar>
             <thead><tr>
               <th>Centro de custo / Subgrupo</th><th>Categorias vinculadas</th><th>Remover</th>
             </tr></thead>
@@ -4374,7 +4397,7 @@ def importar_view():
               <button type="button" id="btnImportar" onclick="confirmarImport()" style="margin-left:auto">Importar selecionados</button>
             </div>
             <div class="tabela-scroll">
-            <table class="compacta">
+            <table class="compacta ajustavel" data-tabela="importar-preview">
               <thead><tr>
                 <th class="cel-check">Imp</th><th class="cel-data">Data</th><th class="cel-desc">Descrição</th>
                 <th class="cel-valor" style="text-align:right">Valor</th><th class="cel-origem">Situação</th>
@@ -4430,6 +4453,9 @@ def importar_view():
             '</tr>'
           )).join('');
           document.getElementById('blocoPreview').style.display = 'block';
+          // o corpo desta tabela so existe depois do preview chegar - reativa as
+          // colunas ajustaveis agora que as linhas estao no DOM
+          ativarTabelaAjustavel(document.querySelector('table[data-tabela="importar-preview"]'), 'importar-preview');
         }}
         function marcarTodos(v) {{
           document.querySelectorAll('#corpoPreview input[type=checkbox]').forEach(cb => cb.checked = v);
@@ -4577,7 +4603,7 @@ def investimentos_view():
         <div class="cat-breakdown">
           <h3>Evolução do saldo</h3>
           <div class="tabela-scroll">
-          <table class="compacta">
+          <table class="compacta ajustavel" data-tabela="investimentos-historico">
             <thead><tr><th>Mês</th><th style="text-align:right">Aplicado</th>
             <th style="text-align:right">Saldo</th><th style="text-align:right">Variação</th></tr></thead>
             <tbody>{"".join(linhas_hist)}</tbody>
@@ -4615,7 +4641,7 @@ def investimentos_view():
             O que entra no resultado é o <strong>rendimento</strong> (receita financeira) e o <strong>IR</strong> (despesa financeira).
           </div>
           <div class="tabela-scroll">
-          <table class="compacta">
+          <table class="compacta ajustavel" data-tabela="investimentos-posicao">
             <thead><tr>
               <th>Aplicação</th>
               <th style="text-align:right">Aplicado</th>
@@ -4962,7 +4988,7 @@ def categorias_view():
             categoria primeiro, usando a coluna "Mover".
           </div>
           <div class="tabela-scroll">
-          <table class="compacta">
+          <table class="compacta ajustavel" data-tabela="categorias">
             <thead><tr>
               <th>Categoria</th><th style="text-align:right">Lanç.</th>
               <th style="text-align:right">Total</th><th>Natureza</th><th>Mover lançamentos</th><th>Remover</th>
