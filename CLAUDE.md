@@ -31,7 +31,14 @@ Na prática:
 
 ## Stack e arquitetura
 
-- **App principal**: `app.py` (Flask) + `templates/` (Jinja2) + `static/` (CSS, JS, logos).
+- **App principal**, separado em quatro camadas:
+  - `app.py` (~45 linhas) — cria o Flask app, registra os filtros Jinja e os blueprints.
+  - `core.py` — constantes, acesso ao banco, permissões, helpers de HTML. **Não importa
+    nada de `views/` nem de `app.py`.**
+  - `views/` — as 22 rotas em 6 blueprints: `auth`, `sistema`, `lancamentos`, `relatorios`,
+    `cadastros`, `usuarios`. Cada módulo importa do `core` só os nomes que usa, listados
+    explicitamente.
+  - `templates/` (Jinja2) e `static/` (CSS, JS, logos).
   Sem framework front-end — JS puro. A view faz SQL e regra de negócio, o template só exibe.
   **O escaping do Jinja é automático**: nada de `esc()` dentro de valor que vai para template
   (gera `&quot;` visível na tela). Quando o valor já é HTML confiável montado no Python
@@ -213,7 +220,19 @@ e valor de dimensão, e o apelido do cartão em `origem_curta()`.
 permissão `importar`) — que aliás estava dando 500 desde `fcedcf1`, sem ninguém notar, porque
 tinha saído do menu. E os redirects legados `/cartoes` e `/naturezas`.
 
-### Como cortar código deste arquivo sem quebrar nada
+### Regra de dependência entre os módulos
+
+`app.py` → `views/` → `core.py`, sempre nessa direção. Nada em `core.py` pode importar de
+`views/`, senão volta o import circular.
+
+**Armadilha do estado compartilhado:** `CATEGORIA_PT_DB` e `CATEGORIAS_OCULTAS` são
+recarregados em runtime (quando o usuário renomeia ou oculta categoria). Como os blueprints
+fazem `from core import CATEGORIA_PT_DB`, `recarregar_categorias_db()` **altera os dicionários
+no lugar** (`clear()` + `update()`). Se algum dia alguém trocar isso por reatribuição, os
+nomes de categoria congelam na versão do boot — sem erro nenhum, só nome errado na tela.
+`tests/test_core_estado.py` trava esse comportamento checando a identidade do objeto.
+
+### Como cortar código sem quebrar nada
 
 Duas vezes nesta sessão um corte por busca de texto apagou código vizinho por engano — uma
 delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derrubou
@@ -230,10 +249,10 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
 
 ## Pendências conhecidas
 
-**Blueprints (única etapa da refatoração que ficou):** `app.py` está em ~3.260 linhas, com
-todo o HTML em `templates/` e o JS/CSS em `static/`. Falta separar as rotas em blueprints por
-área (lançamentos, relatórios, cadastros, usuários). Não é urgente — o arquivo já cabe na
-cabeça — mas é o passo natural se voltar a crescer.
+**`/relatorios` ainda monta HTML por f-string** (~342 linhas em `views/relatorios.py`).
+É a única das 12 telas que não foi para template Jinja — por isso `BASE_CSS` continua
+existindo no `core.py` (usado só por ela e pela página de "sem permissão" do decorator
+`requer`). Enquanto ela existir assim, o escaping ali é manual: usar `esc()`.
 
 **Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
 Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.
