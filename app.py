@@ -2321,7 +2321,12 @@ def index():
           // a soma das colunas (e volta a rolagem que queremos evitar).
           function normalizarParaCaber(larguras) {{
             const soma = Object.values(larguras).reduce((a, b) => a + b, 0);
-            const alvo = table.getBoundingClientRect().width;
+            // NUNCA medir table.getBoundingClientRect() aqui: se a soma das larguras
+            // declaradas passar do espaco disponivel, a tabela already fica mais larga
+            // que o container (table-layout:fixed estoura pra caber as colunas) e a
+            // "largura da tabela" mediria esse valor ja errado, sem nunca corrigir.
+            // O pai (.wrap) nao estoura, entao ele sim reflete o espaco real disponivel.
+            const alvo = table.parentElement.clientWidth;
             if (soma <= 0 || alvo <= 0) return larguras;
             const fator = alvo / soma;
             const normalizado = {{}};
