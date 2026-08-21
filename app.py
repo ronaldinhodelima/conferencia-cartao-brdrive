@@ -261,9 +261,6 @@ CATEGORIAS_NEUTRAS_PADRAO = {
     c for c, n in SEED_NATUREZAS.items() if n in NATUREZAS_NEUTRAS
 }
 
-# dia de fechamento da fatura (fixo, informado pelo usuario - Pluggy nao sincroniza esse dado)
-FATURA_DIA_FECHAMENTO = 12
-
 # conta sintetica usada para lancamentos manuais (dinheiro em especie), fora do Pluggy
 CONTA_MANUAL_ID = "00000000-0000-0000-0000-000000000002"
 
@@ -999,6 +996,20 @@ def migrate():
             cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (2);")
             conn.commit()
 
+        if versao_atual < 3:
+            # Fechamento/vencimento da fatura passam a ser por cartao (antes o
+            # fechamento era uma constante unica no codigo, so funcionava com um
+            # cartao). Modelo misto: o Pluggy preenche fechamento_fatura e
+            # vencimento_fatura quando o banco manda; dia_fechamento/dia_vencimento
+            # sao a sobrescrita manual de /contas, usada quando o banco nao manda
+            # ou manda errado. Guardamos o DIA (1-31) no manual porque a fatura e
+            # recorrente - o dia serve pra qualquer mes.
+            cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS fechamento_fatura DATE;")
+            cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS dia_fechamento integer;")
+            cur.execute("ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS dia_vencimento integer;")
+            cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (3);")
+            conn.commit()
+
         cur.close()
         conn.close()
     except Exception as e:
@@ -1645,13 +1656,13 @@ def topbar_html(titulo, ativo=None):
         return "ativo" if ativo == nome else ""
     return f"""
       <div class="topbar">
-        <div class="marca-box">
+        <a href="/" class="marca-box" style="text-decoration:none" title="Ir para o início">
           <img class="marca-icon" src="data:image/png;base64,{LOGO_TOPBAR_B64}" alt="Pé de Meia">
           <div>
             <span class="marca">{APP_NOME}</span><br>
             <span class="marca-pagina">{titulo} · {session.get('user')}</span>
           </div>
-        </div>
+        </a>
         <div class="nav-menu">
           {f'<a href="/" class="{cls("inicio")}">Lançamentos</a>' if pode("lancamentos_ver") else ""}
           {f'''<div class="dropdown">
@@ -1966,8 +1977,17 @@ def index():
     )
     por_categoria = cur.fetchall()
 
-    cur.execute("SELECT vencimento_fatura FROM cartao.conta WHERE tipo = 'CREDIT' LIMIT 1;")
-    conta_row = cur.fetchone()
+    # datas de fatura por cartao: cada banco fecha e vence em dia diferente, entao
+    # nao da pra ter um numero unico pro sistema todo. Vem do Pluggy por conta.
+    cur.execute(
+        "SELECT c.account_id, c.nome, c.numero_final, c.vencimento_fatura, c.fechamento_fatura, "
+        "c.dia_fechamento, c.dia_vencimento, p.connector_name, it.titular "
+        "FROM cartao.conta c "
+        "JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
+        "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
+        "WHERE c.tipo = 'CREDIT' ORDER BY c.nome;"
+    )
+    contas_credito = cur.fetchall()
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
     nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
@@ -2019,9 +2039,35 @@ def index():
             return f'{c["label"]} - {nome_cartao_curto(final4)}'
         return c["label"]
 
-    dia_vencimento = conta_row["vencimento_fatura"].day if conta_row and conta_row["vencimento_fatura"] else None
-    proximo_fechamento = proxima_ocorrencia_dia(FATURA_DIA_FECHAMENTO)
-    proximo_vencimento = proxima_ocorrencia_dia(dia_vencimento) if dia_vencimento else None
+    def card_fatura_html():
+        """Um card por cartao de credito com fechamento e vencimento. Datas em fonte
+        menor e sem destaque - sao referencia, nao numero de resultado."""
+        if not contas_credito:
+            return ""
+        linhas = []
+        for c in contas_credito:
+            banco = detectar_banco(c["nome"], c["connector_name"])
+            apelido = nomes_cartao.get(c["numero_final"]) if c["numero_final"] else None
+            titulo = apelido or f'{banco}{" · " + esc(c["titular"]) if c["titular"] else ""}'
+            # o dia cadastrado a mao em /contas manda; senao usa o que veio do banco
+            fech = c["dia_fechamento"] or (c["fechamento_fatura"].day if c["fechamento_fatura"] else None)
+            venc = c["dia_vencimento"] or (c["vencimento_fatura"].day if c["vencimento_fatura"] else None)
+            datas = (
+                f'fecha {fech} · vence {venc}' if fech and venc
+                else '<a href="/contas" style="color:var(--ink-faint)">definir datas</a>'
+            )
+            linhas.append(
+                f'<div style="display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:11.5px">'
+                f'<span style="color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{titulo}</span>'
+                f'<span style="color:var(--ink-faint);white-space:nowrap">{datas}</span>'
+                f'</div>'
+            )
+        return (
+            '<div class="card" style="flex:1 1 260px">'
+            '<div class="label" title="Fechamento e vencimento de cada cartão">Faturas por cartão</div>'
+            f'<div style="margin-top:4px">{"".join(linhas)}</div>'
+            '</div>'
+        )
 
     def cat_options(selected):
         return "".join(
@@ -2148,7 +2194,13 @@ def index():
         <div class="filters" style="flex-wrap:wrap;gap:14px">
           <div>
             <label>Mes</label>
-            <input type="month" id="mesInput" value="{mes}" onchange="aplicarFiltros()">
+            <div style="display:flex;align-items:center;gap:4px">
+              <button type="button" class="ver-btn" onclick="mudarMes(-1)" title="Mês anterior"
+                      style="padding:6px 10px;font-size:14px;line-height:1">‹</button>
+              <input type="month" id="mesInput" value="{mes}" onchange="aplicarFiltros()">
+              <button type="button" class="ver-btn" onclick="mudarMes(1)" title="Próximo mês"
+                      style="padding:6px 10px;font-size:14px;line-height:1">›</button>
+            </div>
           </div>
           <div>
             <label>Status</label>
@@ -2184,8 +2236,7 @@ def index():
           <div class="card"><div class="label" title="Despesas do mês">Despesas do mês</div><div class="val" style="color:#c23c34">R$ {gasto_real:,.2f}</div></div>
           <div class="card"><div class="label" title="Resultado do mês (receitas menos despesas)">Resultado do mês</div><div class="val" style="color:{cor_resultado}">R$ {resultado_mes:,.2f}</div></div>
           <div class="card"><div class="label" title="Conferidas">Conferidas</div><div class="val">{conf} / {total}</div></div>
-          <div class="card"><div class="label" title="Fechamento da fatura">Fechamento fatura</div><div class="val">Dia {FATURA_DIA_FECHAMENTO}</div><div class="sub">Próx: {proximo_fechamento.strftime('%d/%m/%y')}</div></div>
-          <div class="card"><div class="label" title="Vencimento da fatura">Vencimento fatura</div><div class="val">{'Dia ' + str(dia_vencimento) if dia_vencimento else '-'}</div><div class="sub">{'Próx: ' + proximo_vencimento.strftime('%d/%m/%y') if proximo_vencimento else ''}</div></div>
+          {card_fatura_html()}
         </div>
 
         <details class="cat-breakdown">
@@ -2324,6 +2375,16 @@ def index():
           params.set('status', document.getElementById('statusInput').value);
           document.querySelectorAll('.chipfilter input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
           return params;
+        }}
+        // avanca/retrocede um mes no filtro. Usa Date pra virar o ano sozinho
+        // (dezembro -> janeiro do ano seguinte) em vez de somar no numero do mes.
+        function mudarMes(delta) {{
+          const campo = document.getElementById('mesInput');
+          const partes = (campo.value || '').split('-').map(Number);
+          if (partes.length !== 2 || !partes[0] || !partes[1]) return;
+          const d = new Date(partes[0], partes[1] - 1 + delta, 1);
+          campo.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+          aplicarFiltros();
         }}
         function aplicarFiltros() {{
           atualizarChipLabels();
@@ -4683,31 +4744,57 @@ def contas_view():
     aviso = erro = None
 
     if request.method == "POST":
-        item_id = request.form.get("item_id")
-        titular = (request.form.get("titular") or "").strip()
+        acao = request.form.get("acao") or "titular"
         try:
-            if not titular:
-                cur.execute("DELETE FROM cartao.item_titular WHERE item_id = %s;", (item_id,))
-                aviso = "Titular removido dessa conexão."
-            else:
+            if acao == "fatura":
+                # dia do mes (1-31). Vazio limpa o campo - nem todo cartao precisa ter.
+                def dia_valido(v):
+                    v = (v or "").strip()
+                    if not v:
+                        return None
+                    try:
+                        n = int(v)
+                    except ValueError:
+                        return None
+                    return n if 1 <= n <= 31 else None
+
                 cur.execute(
-                    "INSERT INTO cartao.item_titular (item_id, titular) VALUES (%s,%s) "
-                    "ON CONFLICT (item_id) DO UPDATE SET titular = EXCLUDED.titular;",
-                    (item_id, titular),
+                    "UPDATE cartao.conta SET dia_fechamento = %s, dia_vencimento = %s WHERE account_id = %s;",
+                    (
+                        dia_valido(request.form.get("dia_fechamento")),
+                        dia_valido(request.form.get("dia_vencimento")),
+                        request.form.get("account_id"),
+                    ),
                 )
-                aviso = f'Titular salvo: "{esc(titular)}".'
+                aviso = "Datas da fatura salvas."
+            else:
+                item_id = request.form.get("item_id")
+                titular = (request.form.get("titular") or "").strip()
+                if not titular:
+                    cur.execute("DELETE FROM cartao.item_titular WHERE item_id = %s;", (item_id,))
+                    aviso = "Titular removido dessa conexão."
+                else:
+                    cur.execute(
+                        "INSERT INTO cartao.item_titular (item_id, titular) VALUES (%s,%s) "
+                        "ON CONFLICT (item_id) DO UPDATE SET titular = EXCLUDED.titular;",
+                        (item_id, titular),
+                    )
+                    aviso = f'Titular salvo: "{esc(titular)}".'
             conn.commit()
         except Exception as e:
             conn.rollback()
             erro = str(e)
 
     cur.execute(
-        "SELECT c.item_id, c.account_id, c.tipo, c.nome, c.numero_final, p.connector_name, it.titular "
+        "SELECT c.item_id, c.account_id, c.tipo, c.nome, c.numero_final, c.dia_fechamento, "
+        "c.dia_vencimento, c.fechamento_fatura, c.vencimento_fatura, p.connector_name, it.titular "
         "FROM cartao.conta c JOIN cartao.pluggy_item p ON p.item_id = c.item_id "
         "LEFT JOIN cartao.item_titular it ON it.item_id = c.item_id "
         "ORDER BY p.connector_name, c.tipo;"
     )
     linhas = cur.fetchall()
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
+    nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
     cur.close()
     conn.close()
 
@@ -4715,20 +4802,73 @@ def contas_view():
     for r in linhas:
         item_id = str(r["item_id"])
         banco = detectar_banco(r["nome"], r["connector_name"])
-        info = conexoes.setdefault(item_id, {"banco": banco, "titular": r["titular"], "contas": []})
+        info = conexoes.setdefault(item_id, {"banco": banco, "titular": r["titular"], "contas": [], "cartoes": []})
         tipo_pt = {"CREDIT": "Cartão de crédito", "BANK": "Conta corrente", "MANUAL": "Dinheiro (manual)"}.get(r["tipo"], r["tipo"])
         detalhe = tipo_pt
         if r["numero_final"]:
             detalhe += f" · final {r['numero_final']}"
         info["contas"].append(detalhe)
+        if r["tipo"] == "CREDIT":
+            info["cartoes"].append(r)
 
     sugestoes = ["Ronaldo", "Andrea", "Ronaldo e Andrea", "Compartilhado"]
     datalist_html = "".join(f'<option value="{s}">' for s in sugestoes)
+
+    def campo_dia(nome, valor, dia_do_banco):
+        """Campo de sobrescrita manual. Quando o banco informou o dia, ele vira o
+        placeholder - assim da pra ver de onde veio o numero sem precisar preencher."""
+        v = "" if valor is None else str(valor)
+        ph = f"banco: {dia_do_banco}" if dia_do_banco else "dia"
+        return (
+            f'<input name="{nome}" value="{v}" type="number" min="1" max="31" placeholder="{ph}" '
+            f'style="width:78px;padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:12px">'
+        )
+
+    def linha_cartao(c):
+        """Cada cartao de credito fecha e vence num dia diferente - por isso e por
+        cartao, nao por conexao nem uma constante do sistema. O Pluggy preenche
+        sozinho quando o banco manda; o campo aqui e so pra corrigir ou completar."""
+        apelido = nomes_cartao.get(c["numero_final"]) if c["numero_final"] else None
+        nome_exib = apelido or (f'final {c["numero_final"]}' if c["numero_final"] else esc(c["nome"] or "Cartão"))
+        dia_fech_banco = c["fechamento_fatura"].day if c["fechamento_fatura"] else None
+        dia_venc_banco = c["vencimento_fatura"].day if c["vencimento_fatura"] else None
+        # o que vale de fato: manual sobrescreve o banco
+        vale_fech = c["dia_fechamento"] or dia_fech_banco
+        vale_venc = c["dia_vencimento"] or dia_venc_banco
+        if vale_fech and vale_venc:
+            resumo = f'<span style="font-size:11.5px;color:var(--good)">✓ fecha {vale_fech} · vence {vale_venc}</span>'
+        else:
+            faltando = " e ".join(x for x in [
+                "fechamento" if not vale_fech else "",
+                "vencimento" if not vale_venc else "",
+            ] if x)
+            resumo = f'<span style="font-size:11.5px;color:var(--bad)">falta {faltando}</span>'
+        return (
+            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;'
+            f'padding:8px 0;border-top:1px solid var(--line-soft)">'
+            f'<input type="hidden" name="acao" value="fatura">'
+            f'<input type="hidden" name="account_id" value="{c["account_id"]}">'
+            f'<span style="font-size:12.5px;min-width:140px">{nome_exib}</span>'
+            f'<span style="font-size:12px;color:#888">fecha dia</span>'
+            f'{campo_dia("dia_fechamento", c["dia_fechamento"], dia_fech_banco)}'
+            f'<span style="font-size:12px;color:#888">vence dia</span>'
+            f'{campo_dia("dia_vencimento", c["dia_vencimento"], dia_venc_banco)}'
+            f'<button type="submit" class="ver-btn">Salvar</button>'
+            f'{resumo}'
+            f'</form>'
+        )
 
     def linha(item_id, info):
         selo = selo_banco_html(info["banco"])
         contas_txt = ", ".join(info["contas"])
         titular_atual = info["titular"] or ""
+        bloco_cartoes = (
+            '<div style="margin-top:10px">'
+            '<div style="font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;'
+            'letter-spacing:.03em;margin-bottom:2px">Fatura</div>'
+            + "".join(linha_cartao(c) for c in info["cartoes"]) +
+            '</div>'
+        ) if info["cartoes"] else ""
         return f"""
         <div class="cat-breakdown" style="padding:16px 18px">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -4740,12 +4880,14 @@ def contas_view():
               </div>
             </div>
             <form method="post" style="display:flex;gap:8px;align-items:center">
+              <input type="hidden" name="acao" value="titular">
               <input type="hidden" name="item_id" value="{item_id}">
               <input name="titular" list="sugestoes-titular" value="{esc(titular_atual)}" placeholder="De quem é essa conta?"
                      style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
           </div>
+          {bloco_cartoes}
         </div>
         """
 
@@ -4759,9 +4901,13 @@ def contas_view():
       {topbar_html('Gerenciar contas', 'contas')}
       <div class="wrap">
         {aviso_html}{erro_html}
-        <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px">
+        <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">
           Diga de quem é cada conta/conexão importada do banco. Isso aparece junto do nome do banco
-          nos lançamentos, relatórios e em qualquer lugar que mostre a origem do dinheiro.
+          nos lançamentos, relatórios e em qualquer lugar que mostre a origem do dinheiro.<br>
+          Para cartões de crédito, o <strong>dia de fechamento e vencimento da fatura</strong> vem
+          automaticamente do banco pela sincronização (aparece como sugestão no campo). Preencha à
+          mão só quando o banco não informar ou informar errado — o que você digitar tem prioridade.
+          Essas datas aparecem na tela de Lançamentos.
         </div>
         <datalist id="sugestoes-titular">{datalist_html}</datalist>
         {blocos}

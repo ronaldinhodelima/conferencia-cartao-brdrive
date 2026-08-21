@@ -126,6 +126,11 @@ CREATE TABLE IF NOT EXISTS cartao.investimento_saldo (
     impostos         NUMERIC(16,2),
     PRIMARY KEY (investimento_id, data)
 );
+
+-- fechamento da fatura vindo do Pluggy (creditData.balanceCloseDate). Fica aqui tambem,
+-- e nao so na migracao do app principal, pra ordem de subida dos dois servicos nao
+-- importar: se o worker sincronizar primeiro, a coluna ja existe.
+ALTER TABLE cartao.conta ADD COLUMN IF NOT EXISTS fechamento_fatura DATE;
 """
 
 
@@ -245,8 +250,9 @@ def upsert_account(cur, item_id, acc):
         """
         INSERT INTO cartao.conta (
             account_id, item_id, nome, tipo, subtipo, bandeira, nivel, numero_final,
-            limite_credito, limite_disponivel, saldo_usado, pagamento_minimo, vencimento_fatura
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            limite_credito, limite_disponivel, saldo_usado, pagamento_minimo, vencimento_fatura,
+            fechamento_fatura
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (account_id) DO UPDATE SET
             nome = EXCLUDED.nome,
             limite_credito = EXCLUDED.limite_credito,
@@ -254,6 +260,7 @@ def upsert_account(cur, item_id, acc):
             saldo_usado = EXCLUDED.saldo_usado,
             pagamento_minimo = EXCLUDED.pagamento_minimo,
             vencimento_fatura = EXCLUDED.vencimento_fatura,
+            fechamento_fatura = EXCLUDED.fechamento_fatura,
             atualizado_em = now();
         """,
         (
@@ -270,6 +277,9 @@ def upsert_account(cur, item_id, acc):
             acc.get("balance"),
             credit.get("minimumPayment"),
             credit.get("balanceDueDate"),
+            # fechamento da fatura por cartao. Nem todo banco preenche - quando vem
+            # nulo, o usuario cadastra o dia manualmente em /contas.
+            credit.get("balanceCloseDate"),
         ),
     )
 
