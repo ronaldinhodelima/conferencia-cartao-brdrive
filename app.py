@@ -3882,7 +3882,7 @@ def contas_view():
                     # nome em branco = remover o apelido, volta a aparecer como "final NNNN"
                     cur.execute("DELETE FROM cartao.cartao_nome WHERE final4 = %s;", (final4,))
                     conn.commit()
-                    aviso = f"Nome do cartão final {esc(final4)} removido."
+                    aviso = f"Nome do cartão final {final4} removido."
                 else:
                     cur.execute(
                         "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s,%s) "
@@ -3890,7 +3890,7 @@ def contas_view():
                         (final4, prefixo),
                     )
                     conn.commit()
-                    aviso = f'Cartão final {esc(final4)} salvo como "{esc(prefixo)}".'
+                    aviso = f'Cartão final {final4} salvo como "{prefixo}".'
             else:
                 item_id = request.form.get("item_id")
                 titular = (request.form.get("titular") or "").strip()
@@ -3903,7 +3903,7 @@ def contas_view():
                         "ON CONFLICT (item_id) DO UPDATE SET titular = EXCLUDED.titular;",
                         (item_id, titular),
                     )
-                    aviso = f'Titular salvo: "{esc(titular)}".'
+                    aviso = f'Titular salvo: "{titular}".'
                 conn.commit()
         except Exception as e:
             conn.rollback()
@@ -3958,132 +3958,30 @@ def contas_view():
                 usados.add(r["numero_final"])
     avulsos = [c for c in cartoes_nome if c["final4"] not in usados]
 
-    sugestoes = ["Ronaldo", "Andrea", "Ronaldo e Andrea", "Compartilhado"]
-    datalist_html = "".join(f'<option value="{s}">' for s in sugestoes)
+    # prepara os dados prontos pro template: dia da fatura ja extraido e a lista de
+    # cartoes de cada conta ja resolvida (principal + adicionais vistos nos lancamentos)
+    for info in conexoes.values():
+        info["selo"] = selo_banco_html(info["banco"])
+        info["contas_txt"] = ", ".join(dict.fromkeys(info["contas"]))
+        for c in info["credito"]:
+            finais = set(finais_por_conta.get(str(c["account_id"]), set()))
+            if c["numero_final"]:
+                finais.add(c["numero_final"])
+            c["finais"] = sorted(finais)
+            c["dia_fechamento"] = c["fechamento_fatura"].day if c["fechamento_fatura"] else None
+            c["dia_vencimento"] = c["vencimento_fatura"].day if c["vencimento_fatura"] else None
 
-    def form_cartao(final4, prefixo, placeholder="ex: Ronaldo - físico"):
-        return (
-            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;'
-            f'padding:7px 0;border-top:1px solid var(--line-soft)">'
-            f'<input type="hidden" name="acao" value="salvar_cartao">'
-            f'<input type="hidden" name="final4" value="{esc(final4)}">'
-            f'<span style="font-size:12px;color:var(--ink-faint);min-width:78px">final {esc(final4)}</span>'
-            f'<input name="prefixo" value="{esc(prefixo or "")}" placeholder="{placeholder}" '
-            f'style="padding:6px 9px;border:1px solid #ccc;border-radius:6px;width:230px;font-size:12.5px">'
-            f'<button type="submit" class="ver-btn">Salvar</button>'
-            f'</form>'
-        )
-
-    def bloco_conta_credito(c):
-        """Uma conta de credito e seus cartoes (o principal + os adicionais que
-        aparecem nos lancamentos). Fechamento/vencimento vem do banco, so leitura."""
-        finais = set(finais_por_conta.get(str(c["account_id"]), set()))
-        if c["numero_final"]:
-            finais.add(c["numero_final"])
-        fech = c["fechamento_fatura"].day if c["fechamento_fatura"] else None
-        venc = c["vencimento_fatura"].day if c["vencimento_fatura"] else None
-        if fech and venc:
-            fatura = f'fatura fecha dia {fech} · vence dia {venc}'
-        elif venc:
-            fatura = f'fatura vence dia {venc} · <span style="color:var(--ink-faint)">fechamento não informado pelo banco</span>'
-        else:
-            fatura = '<span style="color:var(--ink-faint)">datas da fatura ainda não vieram do banco — aparecem após a sincronização</span>'
-        cartoes_html = "".join(
-            form_cartao(f, nomes_cartao.get(f)) for f in sorted(finais)
-        ) or ('<div style="font-size:12px;color:var(--ink-faint);padding:7px 0">'
-              'Nenhum cartão identificado ainda nos lançamentos.</div>')
-        return (
-            '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">'
-            '<div style="font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;'
-            'letter-spacing:.03em">Cartão de crédito</div>'
-            f'<div style="font-size:12.5px;color:var(--ink-soft);margin:3px 0 4px">{fatura}</div>'
-            f'{cartoes_html}'
-            '</div>'
-        )
-
-    def bloco_conexao(item_id, info):
-        selo = selo_banco_html(info["banco"])
-        contas_txt = ", ".join(dict.fromkeys(info["contas"]))
-        titular_atual = info["titular"] or ""
-        return f"""
-        <div class="cat-breakdown" style="padding:16px 18px">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-            <div style="display:flex;align-items:center;gap:9px">
-              {selo}
-              <div>
-                <div style="font-weight:600;font-size:14px">{info["banco"]}</div>
-                <div style="font-size:12px;color:var(--ink-faint)">{contas_txt}</div>
-              </div>
-            </div>
-            <form method="post" style="display:flex;gap:8px;align-items:center">
-              <input type="hidden" name="acao" value="titular">
-              <input type="hidden" name="item_id" value="{item_id}">
-              <input name="titular" list="sugestoes-titular" value="{esc(titular_atual)}" placeholder="De quem é essa conta?"
-                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
-              <button type="submit" class="ver-btn">Salvar</button>
-            </form>
-          </div>
-          {"".join(bloco_conta_credito(c) for c in info["credito"])}
-        </div>
-        """
-
-    bloco_avulsos = ""
-    if avulsos:
-        bloco_avulsos = f"""
-        <div class="cat-breakdown">
-          <h3>Cartões sem conta identificada</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:8px">
-            Cartões nomeados que ainda não apareceram em nenhum lançamento — pode ser um cartão
-            novo, ou um final que mudou. Deixe o nome em branco e salve para remover.
-          </div>
-          {"".join(form_cartao(c["final4"], c["prefixo"]) for c in avulsos)}
-        </div>"""
-
-    blocos = "".join(bloco_conexao(item_id, info) for item_id, info in conexoes.items())
-    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
-    erro_html = f'<div class="aviso-erro">{erro}</div>' if erro else ""
-
-    return f"""
-    <html><head><title>Configurações de Contas / Cartão · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Configurações de Contas / Cartão', 'contas')}
-      <div class="wrap">
-        {aviso_html}{erro_html}
-        <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">
-          Tudo que descreve a <strong>origem do dinheiro</strong> fica aqui.
-          O <strong>titular</strong> diz de quem é cada conexão bancária e aparece junto do nome do
-          banco nos lançamentos e relatórios. O <strong>nome de cada cartão</strong> (físico, virtual,
-          adicional) identifica quem gastou dentro da mesma fatura — um cartão de crédito pode ter
-          vários, e cada um aparece pelos 4 últimos dígitos.
-          As <strong>datas de fatura vêm do banco</strong> pela sincronização e não são editáveis.
-        </div>
-        <datalist id="sugestoes-titular">{datalist_html}</datalist>
-        {blocos}
-        {bloco_avulsos}
-        <div class="cat-breakdown">
-          <h3>Adicionar cartão manualmente</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
-            Use quando um cartão ainda não apareceu em nenhum lançamento e você já quer deixar o
-            nome cadastrado.
-          </div>
-          <form method="post" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="salvar_cartao">
-            <div>
-              <label style="font-size:12px;color:#888;display:block">Últimos 4 dígitos</label>
-              <input name="final4" maxlength="4" placeholder="Ex: 9938"
-                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:110px">
-            </div>
-            <div>
-              <label style="font-size:12px;color:#888;display:block">Nome do cartão</label>
-              <input name="prefixo" placeholder="Ex: Andrea - digital"
-                     style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:230px">
-            </div>
-            <button type="submit" class="ver-btn">Adicionar</button>
-          </form>
-        </div>
-      </div>
-    </body></html>
-    """
+    return render_template(
+        "contas.html",
+        titulo="Configurações de Contas / Cartão",
+        topbar=topbar_html("Configurações de Contas / Cartão", "contas"),
+        aviso=aviso,
+        erro=erro,
+        conexoes=conexoes,
+        nomes_cartao=nomes_cartao,
+        avulsos=avulsos,
+        sugestoes=["Ronaldo", "Andrea", "Ronaldo e Andrea", "Compartilhado"],
+    )
 
 
 @app.route("/api/categoria-lancamentos")

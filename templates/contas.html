@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+<div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">
+  Tudo que descreve a <strong>origem do dinheiro</strong> fica aqui.
+  O <strong>titular</strong> diz de quem é cada conexão bancária e aparece junto do nome do
+  banco nos lançamentos e relatórios. O <strong>nome de cada cartão</strong> (físico, virtual,
+  adicional) identifica quem gastou dentro da mesma fatura — um cartão de crédito pode ter
+  vários, e cada um aparece pelos 4 últimos dígitos.
+  As <strong>datas de fatura vêm do banco</strong> pela sincronização e não são editáveis.
+</div>
+
+<datalist id="sugestoes-titular">
+  {% for s in sugestoes %}<option value="{{ s }}">{% endfor %}
+</datalist>
+
+{% macro form_cartao(final4, nome) %}
+<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+      padding:7px 0;border-top:1px solid var(--line-soft)">
+  <input type="hidden" name="acao" value="salvar_cartao">
+  <input type="hidden" name="final4" value="{{ final4 }}">
+  <span style="font-size:12px;color:var(--ink-faint);min-width:78px">final {{ final4 }}</span>
+  <input name="prefixo" value="{{ nome or '' }}" placeholder="ex: Ronaldo - físico"
+         style="padding:6px 9px;border:1px solid #ccc;border-radius:6px;width:230px;font-size:12.5px">
+  <button type="submit" class="ver-btn">Salvar</button>
+</form>
+{% endmacro %}
+
+{% for item_id, info in conexoes.items() %}
+<div class="cat-breakdown" style="padding:16px 18px">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;align-items:center;gap:9px">
+      {{ info.selo|safe }}{# selo do banco: HTML fixo gerado no Python, sem entrada de usuario #}
+      <div>
+        <div style="font-weight:600;font-size:14px">{{ info.banco }}</div>
+        <div style="font-size:12px;color:var(--ink-faint)">{{ info.contas_txt }}</div>
+      </div>
+    </div>
+    <form method="post" style="display:flex;gap:8px;align-items:center">
+      <input type="hidden" name="acao" value="titular">
+      <input type="hidden" name="item_id" value="{{ item_id }}">
+      <input name="titular" list="sugestoes-titular" value="{{ info.titular or '' }}"
+             placeholder="De quem é essa conta?"
+             style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+      <button type="submit" class="ver-btn">Salvar</button>
+    </form>
+  </div>
+
+  {% for c in info.credito %}
+  <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+    <div style="font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.03em">
+      Cartão de crédito
+    </div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin:3px 0 4px">
+      {% if c.dia_fechamento and c.dia_vencimento %}
+        fatura fecha dia {{ c.dia_fechamento }} · vence dia {{ c.dia_vencimento }}
+      {% elif c.dia_vencimento %}
+        fatura vence dia {{ c.dia_vencimento }} ·
+        <span style="color:var(--ink-faint)">fechamento não informado pelo banco</span>
+      {% else %}
+        <span style="color:var(--ink-faint)">
+          datas da fatura ainda não vieram do banco — aparecem após a sincronização
+        </span>
+      {% endif %}
+    </div>
+    {% for final4 in c.finais %}
+      {{ form_cartao(final4, nomes_cartao.get(final4)) }}
+    {% else %}
+      <div style="font-size:12px;color:var(--ink-faint);padding:7px 0">
+        Nenhum cartão identificado ainda nos lançamentos.
+      </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% if avulsos %}
+<div class="cat-breakdown">
+  <h3>Cartões sem conta identificada</h3>
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:8px">
+    Cartões nomeados que ainda não apareceram em nenhum lançamento — pode ser um cartão novo,
+    ou um final que mudou. Deixe o nome em branco e salve para remover.
+  </div>
+  {% for c in avulsos %}{{ form_cartao(c.final4, c.prefixo) }}{% endfor %}
+</div>
+{% endif %}
+
+<div class="cat-breakdown">
+  <h3>Adicionar cartão manualmente</h3>
+  <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+    Use quando um cartão ainda não apareceu em nenhum lançamento e você já quer deixar o nome
+    cadastrado.
+  </div>
+  <form method="post" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="salvar_cartao">
+    <div>
+      <label style="font-size:12px;color:#888;display:block">Últimos 4 dígitos</label>
+      <input name="final4" maxlength="4" placeholder="Ex: 9938"
+             style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:110px">
+    </div>
+    <div>
+      <label style="font-size:12px;color:#888;display:block">Nome do cartão</label>
+      <input name="prefixo" placeholder="Ex: Andrea - digital"
+             style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:230px">
+    </div>
+    <button type="submit" class="ver-btn">Adicionar</button>
+  </form>
+</div>
+
+{% endblock %}
