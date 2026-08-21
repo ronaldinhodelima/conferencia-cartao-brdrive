@@ -1832,12 +1832,6 @@ def update_transacao(transacao_id):
     return jsonify({"ok": True, "bloqueada": bloqueada, "faltando": faltando})
 
 
-@app.route("/cartoes")
-@requer("cadastros")
-def cartoes():
-    # Fundido em /contas (Configuracoes de Contas / Cartao): o apelido do cartao
-    # descreve a origem do dinheiro, mesmo assunto do titular da conta.
-    return redirect("/contas")
 
 
 @app.route("/dimensoes", methods=["GET", "POST"])
@@ -3584,11 +3578,6 @@ def categorias_view():
     )
 
 
-@app.route("/naturezas", methods=["GET", "POST"])
-@requer("cadastros")
-def naturezas_view():
-    # Fundido em /categorias (natureza contábil agora é uma coluna da mesma tela).
-    return redirect("/categorias")
 
 
 @app.route("/usuarios", methods=["GET", "POST"])
