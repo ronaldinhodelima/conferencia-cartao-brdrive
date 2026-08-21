@@ -1191,7 +1191,7 @@ BASE_CSS = BASE_CSS_HEAD + """
   table.compacta .cel-obs { width: 130px; }
   table.compacta .cel-status { width: 44px; }
   table.compacta .cel-dim { width: 116px; }
-  table.compacta select { width: 100%; max-width: 100%; padding: 4px 5px; font-size: 11.5px; border-radius: 5px; }
+  table.compacta select { width: 100%; max-width: 100%; padding: 4px 5px; font-size: 11.5px; border-radius: 5px; box-sizing: border-box; }
   table.compacta .obs-input { padding: 4px 6px; font-size: 11.5px; }
 
   /* ---------- colunas ajustaveis: redimensionar, reordenar, ordenar ---------- */
@@ -1208,6 +1208,7 @@ BASE_CSS = BASE_CSS_HEAD + """
   table.ajustavel th[data-col].arrastar-sobre { box-shadow: inset 2px 0 0 var(--accent); }
   /* divisor entre colunas - sempre visivel, destaca no hover pra indicar que da pra arrastar */
   table.ajustavel th[data-col]:not(:last-child) { border-right: 1px solid var(--line); }
+  table.ajustavel td[data-col] { box-sizing: border-box; overflow: hidden; }
   table.ajustavel th[data-col] .col-resize-handle {
     position: absolute; right: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize;
     z-index: 5;
@@ -2378,11 +2379,10 @@ def index():
                 estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
                 estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
                 salvarEstado();
-                // a alca se move junto com a coluna durante o arraste, entao o "click"
-                // que o navegador gera ao soltar o mouse pode cair fora dela (no proprio
-                // th) - so o stopPropagation na alca nao e suficiente. A trava e resetada
-                // so depois desse click (se houver) ja ter passado pelo handler do th.
-                setTimeout(function () {{ redimensionandoAgora = false; }}, 0);
+                // rede de seguranca: se por algum motivo nenhum "click" vier depois (caso
+                // comum em arraste real), destrava sozinho depois de um tempo generoso.
+                // O caminho normal e o handler de click do th consumir a trava na hora.
+                setTimeout(function () {{ redimensionandoAgora = false; }}, 300);
               }}
               document.addEventListener('mousemove', mover);
               document.addEventListener('mouseup', soltar);
@@ -2450,7 +2450,7 @@ def index():
           }}
           thead.querySelectorAll('th[data-col]').forEach(th => {{
             th.addEventListener('click', function (e) {{
-              if (redimensionandoAgora) return;
+              if (redimensionandoAgora) {{ redimensionandoAgora = false; return; }}
               if (e.target.classList.contains('col-resize-handle')) return;
               const col = th.dataset.col;
               const dir = (estado.sort && estado.sort.col === col && estado.sort.dir === 'asc') ? 'desc' : 'asc';
