@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+{% if not pend.total %}
+  <div style="font-size:13px;color:var(--good);margin-bottom:16px">
+    ✓ Nenhuma pendência de classificação. Os números do DRE estão consistentes.
+  </div>
+{% else %}
+  <div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">
+    Esta tela existe para garantir a <strong>regra de ouro</strong>: os números precisam ser
+    reais, sem despesa inflada por classificação errada. Resolva o que estiver aqui e o DRE
+    fica confiável.
+  </div>
+{% endif %}
+
+<div class="cat-breakdown">
+  <h3>Categorias sem natureza definida{% if pend.sem_natureza %} ({{ pend.sem_natureza|length }}){% endif %}</h3>
+  {% if pend.sem_natureza %}
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+      Estas categorias chegaram pela sincronização e <strong>ninguém decidiu o que elas são</strong>.
+      O app assume <strong>despesa</strong> por padrão — se alguma for investimento, compra de bem
+      ou transferência, ela está inflando a despesa e distorcendo o resultado do período.
+      Se for uma categoria que você não usa, marque "Não uso" para escondê-la.
+    </div>
+    <table class="compacta ajustavel" data-tabela="pend-natureza">
+      <thead><tr><th>Categoria</th><th>Definir natureza</th><th></th></tr></thead>
+      <tbody>
+        {% for c in pend.sem_natureza %}
+        <tr>
+          <td>
+            {{ nome_categoria(c) }}
+            <div style="font-size:11px;color:var(--ink-faint)">{{ c }}</div>
+          </td>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="acao" value="definir_natureza">
+              <input type="hidden" name="categoria" value="{{ c }}">
+              <select name="natureza" style="padding:5px 7px;font-size:12px">
+                {% for chave, rotulo in naturezas.items() %}
+                <option value="{{ chave }}" {% if chave == natureza_padrao %}selected{% endif %}>{{ rotulo }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="ver-btn">Definir</button>
+            </form>
+          </td>
+          <td>
+            <form method="post" onsubmit="return confirm('Ocultar {{ nome_categoria(c) }}? Ela some das listas.')">
+              <input type="hidden" name="acao" value="ocultar">
+              <input type="hidden" name="categoria" value="{{ c }}">
+              <button type="submit" class="ver-btn">Não uso</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div style="font-size:13px;color:var(--good)">✓ Todas as categorias em uso têm natureza definida.</div>
+  {% endif %}
+</div>
+
+<div class="cat-breakdown">
+  <h3>Despesas fora do centro de custo{% if pend.despesa_sem_centro %} ({{ pend.despesa_sem_centro|length }}){% endif %}</h3>
+  {% if pend.despesa_sem_centro %}
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+      Estas categorias <strong>são despesa</strong> e entram no resultado normalmente, mas não
+      estão em nenhum centro de custo — então somem dos totais por grupo do DRE. Só aparecem
+      aqui as de despesa: vincular receita ou transferência a centro de custo não faria sentido,
+      porque centro de custo é análise de gasto.
+    </div>
+    <table class="compacta ajustavel" data-tabela="pend-centro">
+      <thead><tr><th>Categoria</th><th>Vincular a um subgrupo</th></tr></thead>
+      <tbody>
+        {% for c in pend.despesa_sem_centro %}
+        <tr>
+          <td>
+            {{ nome_categoria(c) }}
+            <div style="font-size:11px;color:var(--ink-faint)">{{ c }}</div>
+          </td>
+          <td>
+            <form method="post" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="acao" value="vincular_centro">
+              <input type="hidden" name="categoria" value="{{ c }}">
+              <select name="subgrupo_id" style="padding:5px 7px;font-size:12px">
+                <option value="">escolha o subgrupo…</option>
+                {% for g in grupos %}
+                  {% if subgrupos_por_grupo.get(g.id) %}
+                  <optgroup label="{{ g.nome }}">
+                    {% for s in subgrupos_por_grupo[g.id] %}
+                    <option value="{{ s.id }}">{{ s.nome }}</option>
+                    {% endfor %}
+                  </optgroup>
+                  {% endif %}
+                {% endfor %}
+              </select>
+              <button type="submit" class="ver-btn">Vincular</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div style="font-size:13px;color:var(--good)">✓ Toda categoria de despesa está em um centro de custo.</div>
+  {% endif %}
+</div>
+
+{% if pend.natureza_manual %}
+<div class="cat-breakdown">
+  <h3>Lançamentos com natureza manual ({{ pend.natureza_manual }})</h3>
+  <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.6">
+    Estes lançamentos têm uma natureza marcada no próprio lançamento, que ignora a natureza da
+    categoria. Funciona, mas fica escondido: quem olhar a categoria depois não entende por que o
+    número não bate. <strong>O caminho mais limpo é mover o lançamento para uma categoria que já
+    tenha a natureza certa</strong> — por exemplo, um PIX que foi a compra de um terreno vai para
+    "Imóveis / Terrenos" (natureza: aquisição de bem), e aí não importa se o meio foi PIX, cartão
+    ou dinheiro. Isso é informativo, não é um erro.
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

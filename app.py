@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
-from flask import Flask, request, redirect, session, jsonify
+from flask import Flask, request, redirect, session, jsonify, render_template
 
 app = Flask(__name__)
 
@@ -676,12 +676,22 @@ def json_script(obj):
     return json.dumps(obj).replace("</", "<\\/")
 
 
-def cat_pt(categoria):
+def cat_pt_puro(categoria):
+    """Nome da categoria em texto puro, SEM escapar.
+
+    Use nos templates Jinja: lá o escaping é automático, então escapar aqui faria
+    escapar duas vezes e a tela mostraria "&amp;lt;" em vez do caractere.
+    Nas telas que ainda montam HTML por f-string, use cat_pt() (que já escapa)."""
     if not categoria:
         return "-"
     if categoria in CATEGORIA_PT_DB:
-        return esc(CATEGORIA_PT_DB[categoria])
-    return esc(CATEGORIA_PT.get(categoria, categoria))
+        return CATEGORIA_PT_DB[categoria]
+    return CATEGORIA_PT.get(categoria, categoria)
+
+
+def cat_pt(categoria):
+    """Nome da categoria já escapado, para interpolar direto em f-string de HTML."""
+    return esc(cat_pt_puro(categoria))
 
 
 def chave_alfa(texto):
@@ -1145,118 +1155,7 @@ def topbar_html(titulo, ativo=None):
           <a href="/logout">Sair</a>
         </div>
       </div>
-      <script>
-        // ---- tooltip proprio: o balao nativo do navegador so aparece depois de ~1s ----
-        (function() {{
-          let el = null, timer = null;
-          function criar() {{
-            if (!el) {{
-              el = document.createElement('div');
-              el.id = 'tooltip';
-              document.body.appendChild(el);
-            }}
-            return el;
-          }}
-          function posicionar(e, t) {{
-            const m = 14;
-            let x = e.clientX + m, y = e.clientY + m;
-            const r = t.getBoundingClientRect();
-            if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - m;
-            if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - m;
-            t.style.left = Math.max(6, x) + 'px';
-            t.style.top = Math.max(6, y) + 'px';
-          }}
-          document.addEventListener('mouseover', function(e) {{
-            const alvo = e.target.closest('[data-tip]');
-            if (!alvo) return;
-            const texto = alvo.getAttribute('data-tip');
-            if (!texto) return;
-            clearTimeout(timer);
-            timer = setTimeout(function() {{
-              const t = criar();
-              t.textContent = texto;
-              t.classList.add('show');
-              posicionar(e, t);
-            }}, 120);
-          }});
-          document.addEventListener('mousemove', function(e) {{
-            if (el && el.classList.contains('show')) posicionar(e, el);
-          }});
-          document.addEventListener('mouseout', function(e) {{
-            if (!e.target.closest('[data-tip]')) return;
-            clearTimeout(timer);
-            if (el) el.classList.remove('show');
-          }});
-          document.addEventListener('click', function() {{
-            clearTimeout(timer);
-            if (el) el.classList.remove('show');
-          }});
-        }})();
-
-        // menu do topo: abre/fecha no clique e fecha ao clicar fora ou apertar Esc
-        function menuToggle(e, btn) {{
-          e.stopPropagation();
-          const drop = btn.closest('.dropdown');
-          const abrir = !drop.classList.contains('aberto');
-          document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
-          if (abrir) drop.classList.add('aberto');
-          btn.blur();
-        }}
-        document.addEventListener('click', function(e) {{
-          if (!e.target.closest('.dropdown')) {{
-            document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
-          }}
-        }});
-        document.addEventListener('keydown', function(e) {{
-          if (e.key === 'Escape') document.querySelectorAll('.dropdown.aberto').forEach(d => d.classList.remove('aberto'));
-        }});
-
-        function syncEhSucesso(status) {{
-          if (!status) return false;
-          const s = String(status).toLowerCase();
-          return s === 'ok' || s === 'success' || s === 'sucesso';
-        }}
-        function syncFormatarTexto(d) {{
-          if (!d.executado_em) return 'Sem sincronização registrada';
-          let txt = 'Atualizado em ' + d.executado_em;
-          if (d.status && !syncEhSucesso(d.status)) txt += ' (erro)';
-          return txt;
-        }}
-        async function syncCarregarStatus() {{
-          // o widget so existe para quem tem permissao de sincronizar
-          if (!document.getElementById('syncTexto')) return;
-          try {{
-            const r = await fetch('/api/sync-status');
-            const d = await r.json();
-            document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
-            const dot = document.getElementById('syncDot');
-            dot.className = 'sync-dot ' + (syncEhSucesso(d.status) ? 'ok' : (d.status ? 'erro' : ''));
-          }} catch (e) {{
-            document.getElementById('syncTexto').textContent = 'Status indisponível';
-          }}
-        }}
-        async function dispararSync() {{
-          const btn = document.getElementById('syncBtn');
-          const dot = document.getElementById('syncDot');
-          btn.disabled = true;
-          btn.textContent = 'Atualizando...';
-          dot.className = 'sync-dot rodando';
-          document.getElementById('syncTexto').textContent = 'Sincronizando com o Pluggy...';
-          try {{
-            const r = await fetch('/api/sync-agora', {{ method: 'POST' }});
-            const d = await r.json();
-            document.getElementById('syncTexto').textContent = syncFormatarTexto(d);
-            dot.className = 'sync-dot ' + (syncEhSucesso(d.status) ? 'ok' : 'erro');
-          }} catch (e) {{
-            document.getElementById('syncTexto').textContent = 'Falha ao atualizar';
-            dot.className = 'sync-dot erro';
-          }} finally {{
-            btn.disabled = false;
-            btn.textContent = 'Atualizar agora';
-          }}
-        }}
-        syncCarregarStatus();
-      </script>
+      <script src="/static/topbar.js"></script>
     """
 
 
@@ -4397,7 +4296,7 @@ def pendencias_view():
                     (categoria, natureza),
                 )
                 conn.commit()
-                aviso = f'Natureza de "{cat_pt(categoria)}" definida como {NATUREZAS[natureza]}.'
+                aviso = f'Natureza de "{cat_pt_puro(categoria)}" definida como {NATUREZAS[natureza]}.'
         elif acao == "vincular_centro":
             categoria = request.form.get("categoria")
             subgrupo_id = request.form.get("subgrupo_id") or None
@@ -4408,7 +4307,7 @@ def pendencias_view():
                     (categoria, subgrupo_id),
                 )
                 conn.commit()
-                aviso = f'"{cat_pt(categoria)}" vinculada ao centro de custo.'
+                aviso = f'"{cat_pt_puro(categoria)}" vinculada ao centro de custo.'
         elif acao == "ocultar":
             categoria = request.form.get("categoria")
             if categoria:
@@ -4418,7 +4317,7 @@ def pendencias_view():
                 )
                 conn.commit()
                 recarregar_categorias_db()
-                aviso = f'"{cat_pt(categoria)}" ocultada — não aparece mais nas listas.'
+                aviso = f'"{cat_pt_puro(categoria)}" ocultada — não aparece mais nas listas.'
 
     pend = levantar_pendencias(cur)
 
@@ -4433,127 +4332,21 @@ def pendencias_view():
     for s in subgrupos_db:
         subgrupos_por_grupo.setdefault(s["grupo_id"], []).append(s)
 
-    def linha_sem_natureza(c):
-        opts = "".join(
-            f'<option value="{k}" {"selected" if k == NATUREZA_PADRAO else ""}>{v}</option>'
-            for k, v in NATUREZAS.items()
-        )
-        return (
-            f'<tr><td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{esc(c)}</div></td>'
-            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
-            f'<input type="hidden" name="acao" value="definir_natureza">'
-            f'<input type="hidden" name="categoria" value="{esc(c)}">'
-            f'<select name="natureza" style="padding:5px 7px;font-size:12px">{opts}</select>'
-            f'<button type="submit" class="ver-btn">Definir</button></form></td>'
-            f'<td><form method="post" onsubmit="return confirm(\'Ocultar {cat_pt(c)}? Ela some das listas.\')">'
-            f'<input type="hidden" name="acao" value="ocultar">'
-            f'<input type="hidden" name="categoria" value="{esc(c)}">'
-            f'<button type="submit" class="ver-btn">Não uso</button></form></td></tr>'
-        )
-
-    def linha_sem_centro(c):
-        opts = ['<option value="">escolha o subgrupo…</option>']
-        for g in grupos_db:
-            subs = subgrupos_por_grupo.get(g["id"], [])
-            if not subs:
-                continue
-            opts.append(f'<optgroup label="{esc(g["nome"])}">')
-            opts.extend(f'<option value="{s["id"]}">{esc(s["nome"])}</option>' for s in subs)
-            opts.append("</optgroup>")
-        return (
-            f'<tr><td>{cat_pt(c)}<div style="font-size:11px;color:var(--ink-faint)">{esc(c)}</div></td>'
-            f'<td><form method="post" style="display:flex;gap:6px;align-items:center">'
-            f'<input type="hidden" name="acao" value="vincular_centro">'
-            f'<input type="hidden" name="categoria" value="{esc(c)}">'
-            f'<select name="subgrupo_id" style="padding:5px 7px;font-size:12px">{"".join(opts)}</select>'
-            f'<button type="submit" class="ver-btn">Vincular</button></form></td></tr>'
-        )
-
-    bloco_natureza = (
-        f"""
-        <div class="cat-breakdown">
-          <h3>Categorias sem natureza definida ({len(pend["sem_natureza"])})</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
-            Estas categorias chegaram pela sincronização e <strong>ninguém decidiu o que elas são</strong>.
-            O app assume <strong>despesa</strong> por padrão — se alguma for investimento, compra de bem ou
-            transferência, ela está inflando a despesa e distorcendo o resultado do período.
-            Se for uma categoria que você não usa, marque "Não uso" para escondê-la.
-          </div>
-          <table class="compacta ajustavel" data-tabela="pend-natureza">
-            <thead><tr><th>Categoria</th><th>Definir natureza</th><th></th></tr></thead>
-            <tbody>{"".join(linha_sem_natureza(c) for c in pend["sem_natureza"])}</tbody>
-          </table>
-        </div>"""
-        if pend["sem_natureza"] else
-        """
-        <div class="cat-breakdown">
-          <h3>Categorias sem natureza definida</h3>
-          <div style="font-size:13px;color:var(--good)">✓ Todas as categorias em uso têm natureza definida.</div>
-        </div>"""
+    # Primeira tela migrada para Jinja (fase 3 da refatoracao). Repare que aqui nao
+    # ha nenhuma chamada a esc(): o proprio Jinja escapa todo {{ ... }}, entao nome
+    # de categoria com HTML dentro sai como texto sem ninguem precisar lembrar.
+    return render_template(
+        "pendencias.html",
+        titulo="Pendências de classificação",
+        topbar=topbar_html("Pendências de classificação", "pendencias"),
+        aviso=aviso,
+        pend=pend,
+        grupos=grupos_db,
+        subgrupos_por_grupo=subgrupos_por_grupo,
+        naturezas=NATUREZAS,
+        natureza_padrao=NATUREZA_PADRAO,
+        nome_categoria=cat_pt_puro,
     )
-
-    bloco_centro = (
-        f"""
-        <div class="cat-breakdown">
-          <h3>Despesas fora do centro de custo ({len(pend["despesa_sem_centro"])})</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
-            Estas categorias <strong>são despesa</strong> e entram no resultado normalmente, mas não estão
-            em nenhum centro de custo — então somem dos totais por grupo do DRE. Só aparecem aqui as de
-            despesa: vincular receita ou transferência a centro de custo não faria sentido, porque
-            centro de custo é análise de gasto.
-          </div>
-          <table class="compacta ajustavel" data-tabela="pend-centro">
-            <thead><tr><th>Categoria</th><th>Vincular a um subgrupo</th></tr></thead>
-            <tbody>{"".join(linha_sem_centro(c) for c in pend["despesa_sem_centro"])}</tbody>
-          </table>
-        </div>"""
-        if pend["despesa_sem_centro"] else
-        """
-        <div class="cat-breakdown">
-          <h3>Despesas fora do centro de custo</h3>
-          <div style="font-size:13px;color:var(--good)">✓ Toda categoria de despesa está em um centro de custo.</div>
-        </div>"""
-    )
-
-    bloco_manual = (
-        f"""
-        <div class="cat-breakdown">
-          <h3>Lançamentos com natureza manual ({pend["natureza_manual"]})</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.6">
-            Estes lançamentos têm uma natureza marcada no próprio lançamento, que ignora a natureza da
-            categoria. Funciona, mas fica escondido: quem olhar a categoria depois não entende por que
-            o número não bate. <strong>O caminho mais limpo é mover o lançamento para uma categoria que
-            já tenha a natureza certa</strong> — por exemplo, um PIX que foi a compra de um terreno vai
-            para "Imóveis / Terrenos" (natureza: aquisição de bem), e aí não importa se o meio foi PIX,
-            cartão ou dinheiro. Isso é informativo, não é um erro.
-          </div>
-        </div>"""
-        if pend["natureza_manual"] else ""
-    )
-
-    aviso_html = f'<div class="aviso-ok">{aviso}</div>' if aviso else ""
-    resumo = (
-        '<div style="font-size:13px;color:var(--good);margin-bottom:16px">'
-        '✓ Nenhuma pendência de classificação. Os números do DRE estão consistentes.</div>'
-        if not pend["total"] else
-        f'<div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px;line-height:1.6">'
-        f'Esta tela existe para garantir a <strong>regra de ouro</strong>: os números precisam ser reais, '
-        f'sem despesa inflada por classificação errada. Resolva o que estiver aqui e o DRE fica confiável.</div>'
-    )
-
-    return f"""
-    <html><head><title>Pendências de classificação · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Pendências de classificação', 'pendencias')}
-      <div class="wrap">
-        {aviso_html}
-        {resumo}
-        {bloco_natureza}
-        {bloco_centro}
-        {bloco_manual}
-      </div>
-    </body></html>
-    """
 
 
 @app.route("/categorias", methods=["GET", "POST"])

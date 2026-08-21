@@ -1,0 +1,30 @@
+{#
+  Esqueleto de todas as telas. As telas fazem {% extends "base.html" %} e
+  preenchem o bloco `conteudo`.
+
+  Por que Jinja e nao f-string: aqui o escaping e AUTOMATICO. Tudo que vier de
+  {{ variavel }} sai escapado sem ninguem precisar lembrar de chamar esc() -
+  que foi exatamente a origem do XSS corrigido nesta sessao. Quando o valor ja
+  for HTML confiavel montado no Python, use |safe explicitamente (assim fica
+  visivel na revisao que aquele ponto foi uma decisao, nao um esquecimento).
+#}
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }} · Pé de Meia</title>
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/tabelas.js"></script>
+</head>
+<body>
+  {{ topbar|safe }}{# HTML gerado por topbar_html(), sem entrada de usuario nao escapada #}
+  <div class="wrap">
+    {% if aviso %}<div class="aviso-ok">{{ aviso }}</div>{% endif %}
+    {% if erro %}<div class="aviso-erro">{{ erro }}</div>{% endif %}
+    {% block conteudo %}{% endblock %}
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
