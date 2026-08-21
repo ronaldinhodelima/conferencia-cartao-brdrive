@@ -83,10 +83,16 @@ Na prática:
 - `usuario` — login/senha (PBKDF2-HMAC-SHA256, 200k iterações) + perfil + permissões.
 - `item_titular` — de quem é cada conexão bancária (Ronaldo / Andrea / Ronaldo e Andrea).
 - `investimento` / `investimento_saldo` — posições de investimento e histórico diário de saldo.
-- `cartao_nome` — apelido de cada cartão pelos 4 últimos dígitos.
+- `cartao_nome` — apelido de cada cartão pelos 4 últimos dígitos. Um cartão de crédito (uma
+  linha em `conta`) pode ter vários cartões físicos/virtuais/adicionais; a `conta` guarda só o
+  final do principal, e os adicionais só aparecem em `transacao.numero_cartao_final` — é dali
+  que a tela `/contas` descobre quais cartões existem.
 - `regra_classificacao` / `regra_dimensao_valor` — regras automáticas de categorização.
 - `dimensao` / `dimensao_valor` / `transacao_dimensao` — dimensões livres (ex: Responsável:
   Ronaldo/Andrea/Amanda/Compartilhado, Projeto, etc.) além da categoria.
+  `dimensao_valor` também guarda `teto_mensal` / `teto_anual` (teto de gasto por valor).
+- `schema_version` — controle de migração (ver `migrate()`). Cada bloco `if versao_atual < N`
+  roda uma vez só; **não reescrever migração já aplicada** — criaria divergência de schema.
 
 ## Modelo de natureza (5 categorias, base do DRE)
 
@@ -107,14 +113,18 @@ Usuários atuais: `ronaldo` (admin), `andrea` (admin, herdado do sistema antigo)
 ## Identidade visual
 
 - Nome: **Pé de Meia**. Logo oficial fornecida pelo usuário (meia de tricô com dinheiro),
-  sempre usando a variação de **fundo claro sólido** (nunca a transparente nem a escura).
-  Os PNGs já cortados/otimizados foram embutidos como base64 direto no `app.py`
-  (`LOGO_FAVICON_B64`, `LOGO_TOPBAR_B64`, `LOGO_HERO_B64`) — não dependem de arquivo externo.
+  em **fundo claro sólido** no topbar e na tela de login.
+  Os PNGs foram embutidos como base64 direto no `app.py` (`LOGO_TOPBAR_B64`, `LOGO_HERO_B64`)
+  — não dependem de arquivo externo.
+- **Favicon**: meia sólida em marrom (`#9f7251`) com **fundo transparente**, diferente da logo
+  do topbar. Cuidado: o favicon que vale está **hardcoded dentro de `BASE_CSS_HEAD`**
+  (`<link rel="icon" ...>`); a variável `LOGO_FAVICON_B64` existe mas **não é usada por
+  ninguém** — mexer nela não muda nada na tela.
 - Bancos identificados por "selo" colorido em CSS puro (cor da marca + sigla de 2 letras),
   não por logo de imagem — Pluggy não fornece logo utilizável.
 - Tooltips customizados (120ms, mais rápido que o `title` nativo do navegador).
 
-## Funcionalidades já construídas (nesta sessão, em ordem)
+## Funcionalidades já construídas (sessão 1 — Cowork)
 
 1. Sync completo do Pluggy (corrigido bug de paginação — campo `next`, não `cursor.after`).
 2. Relatórios em ordem cronológica (gráfico) com lista "Totais agrupados" mais recente primeiro.
@@ -143,22 +153,91 @@ Usuários atuais: `ronaldo` (admin), `andrea` (admin, herdado do sistema antigo)
     lugar que mostre a origem do dinheiro.
 17. Correção do bug do botão "Atualizar agora" (URL do worker de sync desatualizada).
 
+## Funcionalidades e correções (sessão 2 — Claude Code, 20–21/08/2026)
+
+Segurança:
+1. Cookie de sessão com `Secure`, `HttpOnly` e `SameSite=Lax`.
+2. Senhas de fallback hardcoded (`changeme1/2`) removidas — sem env, a conta de emergência
+   simplesmente não existe.
+3. **XSS corrigido em todo o app** (`esc()` e `json_script()`): nome de categoria, dimensão,
+   grupo, cartão, titular, descrição/observação de lançamento e mensagens de aviso. O caso mais
+   grave era `json.dumps()` dentro de `<script>` — não escapa `</`, então uma descrição contendo
+   `</script>` executava JS para qualquer um que abrisse Lançamentos. Validado com payload real.
+4. `/sync` do worker exige `X-Sync-Secret` (env `SYNC_SECRET`, mesma nos dois serviços).
+5. `/` do worker parou de expor a lista de tabelas do banco e o resumo do sync sem a chave.
+
+Processo:
+6. Migração versionada (`cartao.schema_version`) — antes rodava ~30 DDL a cada boot.
+7. `tests/` com 46 testes (ver seção "Testes automatizados").
+8. `.gitignore` e identidade do git configurada.
+
+Produto:
+9. Login: mostrar senha + `autocomplete` para o navegador salvar credencial.
+10. Favicon novo (meia sólida, fundo transparente). **Atenção**: o favicon real fica hardcoded
+    dentro de `BASE_CSS_HEAD`, não na variável `LOGO_FAVICON_B64` (que não é usada).
+11. `/categorias`: clicar em "X lanç. — protegida" lista os lançamentos que bloqueiam a remoção.
+12. `/grupos` virou **Centro de Custos**: tabela única, hierarquia visual grupo → subgrupo,
+    vínculo de categoria por chips removíveis.
+13. Teto de gasto saiu do centro de custo e virou **teto por valor de dimensão** (ex: "Ronaldo:
+    R$3.000/mês"), com barra de progresso do gasto real do mês/ano em `/dimensoes`.
+14. **`/pendencias`** — painel de pendências de classificação (ver seção própria).
+15. **Colunas ajustáveis em todas as 7 tabelas**: redimensionar (estilo planilha, a vizinha
+    compensa), reordenar arrastando o cabeçalho, ordenar clicando no título, botão "Redefinir
+    colunas". Preferências no `localStorage` por tabela. Ver seção própria.
+16. Fatura por cartão: `fechamento_fatura`/`vencimento_fatura` vêm do Pluggy por conta — antes
+    o fechamento era uma constante única (`FATURA_DIA_FECHAMENTO`), que só servia para um cartão.
+17. `/cartoes` foi **fundido** em `/contas`, agora **"Configurações de Contas / Cartão"**:
+    titular da conexão + nome de cada cartão (físico, virtual, adicional) + datas da fatura
+    (somente leitura). `/cartoes` redireciona para `/contas`.
+18. Navegação de mês (`‹ ›`) em Lançamentos e logo do topbar como link para o início.
+
 ## Pendências conhecidas
 
-- Nenhuma pendência técnica aberta no momento. Toda vez que uma nova conexão bancária for
-  adicionada no Pluggy, lembrar que o `item_id` precisa ser adicionado manualmente na env var
-  `PLUGGY_ITEM_ID` do worker de sync (`hdgffcvh3ljqe61dczztaycz`) — a auto-descoberta só
-  funciona para conexões que já sincronizaram alguma vez.
-- Considerar migrar de `git push` manual + Coolify API para um **webhook automático** do
-  GitHub → Coolify (deploy automático a cada push na `main`), o que eliminaria a etapa manual
-  de disparar o deploy.
+**Dívida técnica principal — `app.py` monolítico (5.600+ linhas):**
+- 23% do arquivo (~82 KB) são os 3 logos em base64; deveriam virar arquivos em `static/`.
+- `index()` sozinha tem ~620 linhas misturando SQL, regra de negócio, HTML, CSS e JS.
+- O plano discutido foi separar em `templates/` (Jinja2, que ainda traria escaping automático
+  de graça), `static/` e blueprints por área. **Não foi feito** — na sessão 2 optamos pela
+  correção pontual de XSS, que resolveu o risco mas manteve a estrutura.
 
-## Skills / ferramentas usadas nesta sessão
+**Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
+Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.
 
-Nenhuma skill "empacotada" do Cowork foi usada para construir o Pé de Meia — foi trabalho de
-engenharia direta (Python/Flask/SQL/Coolify API) via Bash, Edit, Read, Write. As skills de
-BRDrive disponíveis no ambiente (vendas, propostas comerciais, etc.) são de outro contexto
-(comercial) e não têm relação com este projeto financeiro pessoal.
+**Operacional:** toda vez que uma nova conexão bancária for adicionada no Pluggy, o `item_id`
+precisa entrar manualmente na env `PLUGGY_ITEM_ID` do worker (`hdgffcvh3ljqe61dczztaycz`) —
+a auto-descoberta só funciona para conexões que já sincronizaram alguma vez.
+
+**Colunas órfãs:** `conta.dia_fechamento` e `conta.dia_vencimento` existem no banco (migração v3)
+mas não são lidas nem gravadas por ninguém — foram uma tentativa de sobrescrita manual das datas
+de fatura, descontinuada. Ficaram porque reescrever migração já aplicada criaria divergência de
+schema entre bancos.
+
+**Decisão sobre o worker (21/08/2026):** o worker fica **acessível publicamente**, sem restrição
+de IP. Tentamos aplicar uma `ipallowlist` no Traefik e ela **quebrou o sync** (403): o app chama
+o worker pela URL pública e o Traefik enxerga um IP interno do Docker, não o IP público do
+servidor (45.163.12.5). Foi revertido. A proteção real hoje é por chave (`SYNC_SECRET`), não por
+rede. Se algum dia quiser fechar de verdade: fazer o app chamar o worker pela rede interna
+(`http://<container>:8000/sync`) e remover o domínio público dele.
+
+## Como trabalhar neste projeto (fluxo que deu certo)
+
+Nenhuma skill "empacotada" foi usada — é engenharia direta (Python/Flask/SQL/Coolify API).
+As skills de BRDrive disponíveis no ambiente (vendas, propostas) são de outro contexto e não
+têm relação com este projeto.
+
+O ciclo usado na sessão 2, que vale repetir:
+1. **Ler o código antes de mudar** — várias vezes a causa raiz era diferente da aparente
+   (ex: coluna que "não reduzia" era um `max-width:0` conflitante; divisor "sumido" entre
+   Origem e Categoria era `display:flex` vazando de `.cel-origem` para o `<th>`).
+2. `python3 -m py_compile app.py bussola/app.py` e `pytest tests/ -q` antes de commitar.
+3. Commit + push (o webhook faz o deploy sozinho), **e então validar em produção** —
+   status no Coolify, `/health`, logs (procurar traceback e `Aviso: falha ao rodar migracao`)
+   e teste real da tela pelo navegador.
+4. **Testar de verdade, não só ler o código.** O teste com payload real de XSS encontrou 3
+   pontos que a varredura por grep não pegou. Testar em produção também já mostrou que o
+   `localStorage` precisa ser limpo **antes** de recarregar, senão o estado antigo em memória
+   falseia o resultado.
+5. Limpar dados de teste depois (categoria de teste, teto de teste, `localStorage`).
 
 ## Como continuar no Claude Code
 
@@ -181,6 +260,12 @@ Webhook do GitHub -> Coolify configurado em 20/08/2026. Todo push na `main` disp
 
 ## Classificação: natureza e centro de custo (decisão de 21/08/2026)
 
+A tela **`/pendencias`** ("Pendências de classificação", no menu Configurações) materializa
+tudo isto: lista categoria sem natureza e categoria de despesa sem centro de custo, com ação
+direta em cada linha, e conta os lançamentos que ainda usam natureza manual. Uma faixa de
+alerta aparece no DRE quando há pendência que distorce número — natureza manual sozinha
+**não** dispara alerta, porque não é erro.
+
 Como garantir que os números do DRE são reais, sem despesa inflada:
 
 - **A natureza vem da categoria, não do lançamento.** Para classificar uma operação fora do
@@ -197,6 +282,30 @@ Como garantir que os números do DRE são reais, sem despesa inflada:
 - **Centro de custo só se aplica a categorias de despesa.** Vincular receita ou transferência a
   um centro de custo não faz sentido contábil — centro de custo é análise de gasto. Por isso
   `/pendencias` só cobra vínculo das categorias com natureza `despesa`.
+
+## Colunas ajustáveis nas tabelas
+
+Utilitário compartilhado no `<script>` do `BASE_CSS` (roda em todas as telas). Para ligar numa
+tabela nova, basta: `<table class="compacta ajustavel" data-tabela="chave-unica">`. O resto é
+automático — atribui `data-col` por índice quando o HTML não traz, injeta o botão "Redefinir
+colunas" e se ativa no `DOMContentLoaded`.
+
+- `data-sem-ordenar` / `data-sem-reordenar` desligam recursos individualmente. Usado no
+  **Centro de Custos**, que é hierárquico (linhas de grupo usam `colspan`): ordenar embaralharia
+  a hierarquia e reordenar colunas quebraria essas linhas.
+- Preferências (ordem, largura, ordenação) ficam no `localStorage`, chave `pedemeia_tabela_<chave>`.
+- Redimensionar é **estilo planilha**: a coluna vizinha compensa, então a soma nunca muda e a
+  tabela nunca estoura a largura da tela (a de Lançamentos não tem scroll horizontal).
+- Ordenação numérica entende `R$ 1,234.56` (formato do `:,.2f` do Python, que é o usado no app)
+  **e** `R$ 1.234,56` — o separador decimal é o último `.` ou `,` do texto.
+
+Duas armadilhas já resolvidas, que voltam a morder se alguém mexer:
+- Quando um filtro recarrega a tabela por AJAX (`aplicarFiltros` faz `replaceWith`), **é preciso
+  chamar `ativarTabelaAjustavel()` de novo** — o elemento antigo vai embora levando os listeners.
+- CSS de célula não pode vazar para o `<th>`: `.cel-origem { display:flex }` (pensado para o selo
+  do banco na célula) tirava o cabeçalho do grid da tabela e fazia a coluna seguinte desenhar por
+  cima. Por isso a regra é `td.cel-origem` e há um `display:table-cell !important` defensivo nos
+  `th[data-col]`.
 
 ## Testes automatizados
 
