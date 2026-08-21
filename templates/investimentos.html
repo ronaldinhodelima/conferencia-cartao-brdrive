@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block conteudo %}
+{% if not sincronizado %}
+  <div class="cat-breakdown">
+    <h3>Ainda não sincronizado</h3>
+    <div style="font-size:13px;color:var(--ink-soft)">
+      Os investimentos são carregados na próxima sincronização com o Pluggy.
+      Clique em <strong>Atualizar agora</strong> no topo e recarregue esta página.
+    </div>
+  </div>
+{% else %}
+  <div class="cards">
+    <div class="card"><div class="label">Saldo líquido</div><div class="val">{{ saldo_total|moeda }}</div></div>
+    <div class="card"><div class="label">Valor aplicado</div><div class="val" style="font-size:19px">{{ aplicado_total|moeda }}</div></div>
+    <div class="card"><div class="label">Rendimento bruto</div><div class="val" style="color:#1f8a53;font-size:19px">{{ rendimento_bruto|moeda }}</div><div class="sub">{{ "%.1f"|format(rend_pct) }}% sobre o aplicado</div></div>
+    <div class="card"><div class="label">IR a recolher</div><div class="val" style="color:#c23c34;font-size:19px">{{ ir_total|moeda }}</div></div>
+    <div class="card"><div class="label">Aplicações ativas</div><div class="val">{{ ativos|length }}</div><div class="sub">{{ encerrados }} encerradas</div></div>
+  </div>
+
+  <div class="cat-breakdown">
+    <h3>Posição por aplicação</h3>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
+      O <strong>saldo é patrimônio</strong>, não entra no DRE — aplicar e resgatar só muda a forma do dinheiro.
+      O que entra no resultado é o <strong>rendimento</strong> (receita financeira) e o <strong>IR</strong> (despesa financeira).
+    </div>
+    <div class="tabela-scroll">
+      <table class="compacta ajustavel" data-tabela="investimentos-posicao">
+        <thead><tr>
+          <th>Aplicação</th>
+          <th style="text-align:right">Aplicado</th>
+          <th style="text-align:right">Bruto hoje</th>
+          <th style="text-align:right">Rendimento</th>
+          <th style="text-align:right">IR</th>
+          <th style="text-align:right">Saldo líquido</th>
+          <th>Vencimento</th>
+        </tr></thead>
+        <tbody>
+          {% for a in ativos %}
+            <tr>
+              <td>{{ a.nome }}<div style="font-size:11px;color:var(--ink-faint)">{{ a.detalhe }}</div></td>
+              <td class="valor">{{ a.aplicado|moeda }}</td>
+              <td class="valor">{{ a.bruto|moeda }}</td>
+              <td class="valor" style="color:#1f8a53">{{ a.rend|moeda }}<div style="font-size:11px">{{ "%.1f"|format(a.pct) }}%</div></td>
+              <td class="valor" style="color:var(--ink-faint)">{{ a.impostos|moeda }}</td>
+              <td class="valor" style="font-weight:600">{{ a.saldo|moeda }}</td>
+              <td style="font-size:11.5px;color:var(--ink-soft)">{{ a.vencimento }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" style="padding:18px;text-align:center;color:#888">Nenhum investimento com saldo.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cat-breakdown">
+    <h3>Evolução do saldo</h3>
+    {% if historico|length > 1 %}
+      <div class="tabela-scroll">
+        <table class="compacta ajustavel" data-tabela="investimentos-historico">
+          <thead><tr><th>Mês</th><th style="text-align:right">Aplicado</th>
+          <th style="text-align:right">Saldo</th><th style="text-align:right">Variação</th></tr></thead>
+          <tbody>
+            {% for h in historico %}
+              <tr>
+                <td>{{ h.rotulo }}</td>
+                <td class="valor">{{ h.aplicado|moeda }}</td>
+                <td class="valor">{{ h.saldo|moeda }}</td>
+                <td class="valor">
+                  {% if h.variacao is none %}-{% else %}
+                    <span style="color:{{ '#1f8a53' if h.variacao >= 0 else '#c23c34' }}">{{ h.variacao|moeda }}</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div style="font-size:13px;color:var(--ink-soft)">
+        O Pluggy devolve apenas a posição de hoje, sem histórico. A partir de agora o app
+        guarda um retrato do saldo a cada sincronização, então a evolução mês a mês
+        começa a aparecer no próximo mês.
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

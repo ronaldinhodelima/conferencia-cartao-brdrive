@@ -3449,139 +3449,72 @@ def investimentos_view():
     cur.close()
     conn.close()
 
+    contexto = {
+        "titulo": "Investimentos",
+        "topbar": topbar_html("Investimentos", "investimentos"),
+    }
     if posicoes is None:
-        return f"""
-        <html><head><title>Investimentos · Pé de Meia</title>{BASE_CSS}</head>
-        <body>
-          {topbar_html('Investimentos', 'investimentos')}
-          <div class="wrap"><div class="cat-breakdown">
-            <h3>Ainda não sincronizado</h3>
-            <div style="font-size:13px;color:var(--ink-soft)">
-              Os investimentos são carregados na próxima sincronização com o Pluggy.
-              Clique em <strong>Atualizar agora</strong> no topo e recarregue esta página.
-            </div>
-          </div></div>
-        </body></html>
-        """
-
-    ativos = [p for p in posicoes if float(p["saldo"] or 0) > 0]
-    encerrados = len(posicoes) - len(ativos)
-
-    saldo_total = sum(float(p["saldo"] or 0) for p in ativos)
-    bruto_total = sum(float(p["valor_bruto"] or 0) for p in ativos)
-    aplicado_total = sum(float(p["valor_aplicado"] or 0) for p in ativos)
-    ir_total = sum(float(p["impostos"] or 0) for p in ativos)
-    rendimento_bruto = bruto_total - aplicado_total
-    rend_pct = (rendimento_bruto / aplicado_total * 100) if aplicado_total else 0
+        return render_template("investimentos.html", sincronizado=False, **contexto)
 
     def _dt(v):
         return v.strftime("%d/%m/%Y") if v else "-"
 
-    linhas = []
-    for p in ativos:
+    brutos = [p for p in posicoes if float(p["saldo"] or 0) > 0]
+    ativos = []
+    for p in brutos:
         aplicado = float(p["valor_aplicado"] or 0)
         bruto = float(p["valor_bruto"] or 0)
         rend = bruto - aplicado
-        pct = (rend / aplicado * 100) if aplicado else 0
         taxa = ""
         if p["taxa"] and float(p["taxa"]) > 0:
             taxa = f'{float(p["taxa"]):g}% {p["tipo_taxa"] or ""}'.strip()
-        linhas.append(
-            f'<tr>'
-            f'<td>{(p["nome"] or "-")[:46]}<div style="font-size:11px;color:var(--ink-faint)">'
-            f'{p["subtipo"] or p["tipo"] or ""}{" · " + taxa if taxa else ""}</div></td>'
-            f'<td class="valor">{_fmt_moeda(aplicado)}</td>'
-            f'<td class="valor">{_fmt_moeda(bruto)}</td>'
-            f'<td class="valor" style="color:#1f8a53">{_fmt_moeda(rend)}<div style="font-size:11px">{pct:.1f}%</div></td>'
-            f'<td class="valor" style="color:var(--ink-faint)">{_fmt_moeda(float(p["impostos"] or 0))}</td>'
-            f'<td class="valor" style="font-weight:600">{_fmt_moeda(float(p["saldo"] or 0))}</td>'
-            f'<td style="font-size:11.5px;color:var(--ink-soft)">{_dt(p["data_vencimento"])}</td>'
-            f'</tr>'
-        )
-    corpo = "".join(linhas) or '<tr><td colspan="7" style="padding:18px;text-align:center;color:#888">Nenhum investimento com saldo.</td></tr>'
+        detalhe = p["subtipo"] or p["tipo"] or ""
+        if taxa:
+            detalhe = f"{detalhe} · {taxa}" if detalhe else taxa
+        ativos.append({
+            "nome": (p["nome"] or "-")[:46],
+            "detalhe": detalhe,
+            "aplicado": aplicado,
+            "bruto": bruto,
+            "rend": rend,
+            "pct": (rend / aplicado * 100) if aplicado else 0,
+            "impostos": float(p["impostos"] or 0),
+            "saldo": float(p["saldo"] or 0),
+            "vencimento": _dt(p["data_vencimento"]),
+        })
 
-    # evolucao mes a mes (so a partir do momento em que passamos a guardar o retrato)
-    linhas_hist = []
+    aplicado_total = sum(a["aplicado"] for a in ativos)
+    bruto_total = sum(a["bruto"] for a in ativos)
+    rendimento_bruto = bruto_total - aplicado_total
+
+    # historico do mais recente para o mais antigo; a variacao de cada mes e a
+    # diferenca para o mes seguinte (o de cima na tabela)
+    hist = []
     anterior = None
     for h in reversed(historico):
         saldo = float(h["saldo"] or 0)
-        aplicado = float(h["aplicado"] or 0)
-        variacao = ""
-        if anterior is not None:
-            dif = anterior - saldo
-            cor = "#1f8a53" if dif >= 0 else "#c23c34"
-            variacao = f'<span style="color:{cor}">{_fmt_moeda(dif)}</span>'
         mes = h["mes"]
-        linhas_hist.append(
-            f'<tr><td>{MESES_ABREV[int(mes[5:7]) - 1]}/{mes[2:4]}</td>'
-            f'<td class="valor">{_fmt_moeda(aplicado)}</td>'
-            f'<td class="valor">{_fmt_moeda(saldo)}</td>'
-            f'<td class="valor">{variacao or "-"}</td></tr>'
-        )
+        hist.append({
+            "rotulo": f"{MESES_ABREV[int(mes[5:7]) - 1]}/{mes[2:4]}",
+            "aplicado": float(h["aplicado"] or 0),
+            "saldo": saldo,
+            "variacao": None if anterior is None else anterior - saldo,
+        })
         anterior = saldo
-    bloco_hist = ""
-    if len(historico) > 1:
-        bloco_hist = f"""
-        <div class="cat-breakdown">
-          <h3>Evolução do saldo</h3>
-          <div class="tabela-scroll">
-          <table class="compacta ajustavel" data-tabela="investimentos-historico">
-            <thead><tr><th>Mês</th><th style="text-align:right">Aplicado</th>
-            <th style="text-align:right">Saldo</th><th style="text-align:right">Variação</th></tr></thead>
-            <tbody>{"".join(linhas_hist)}</tbody>
-          </table>
-          </div>
-        </div>"""
-    else:
-        bloco_hist = """
-        <div class="cat-breakdown">
-          <h3>Evolução do saldo</h3>
-          <div style="font-size:13px;color:var(--ink-soft)">
-            O Pluggy devolve apenas a posição de hoje, sem histórico. A partir de agora o app
-            guarda um retrato do saldo a cada sincronização, então a evolução mês a mês
-            começa a aparecer no próximo mês.
-          </div>
-        </div>"""
 
-    return f"""
-    <html><head><title>Investimentos · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Investimentos', 'investimentos')}
-      <div class="wrap">
-        <div class="cards">
-          <div class="card"><div class="label">Saldo líquido</div><div class="val">{_fmt_moeda(saldo_total)}</div></div>
-          <div class="card"><div class="label">Valor aplicado</div><div class="val" style="font-size:19px">{_fmt_moeda(aplicado_total)}</div></div>
-          <div class="card"><div class="label">Rendimento bruto</div><div class="val" style="color:#1f8a53;font-size:19px">{_fmt_moeda(rendimento_bruto)}</div><div class="sub">{rend_pct:.1f}% sobre o aplicado</div></div>
-          <div class="card"><div class="label">IR a recolher</div><div class="val" style="color:#c23c34;font-size:19px">{_fmt_moeda(ir_total)}</div></div>
-          <div class="card"><div class="label">Aplicações ativas</div><div class="val">{len(ativos)}</div><div class="sub">{encerrados} encerradas</div></div>
-        </div>
-
-        <div class="cat-breakdown">
-          <h3>Posição por aplicação</h3>
-          <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;line-height:1.6">
-            O <strong>saldo é patrimônio</strong>, não entra no DRE — aplicar e resgatar só muda a forma do dinheiro.
-            O que entra no resultado é o <strong>rendimento</strong> (receita financeira) e o <strong>IR</strong> (despesa financeira).
-          </div>
-          <div class="tabela-scroll">
-          <table class="compacta ajustavel" data-tabela="investimentos-posicao">
-            <thead><tr>
-              <th>Aplicação</th>
-              <th style="text-align:right">Aplicado</th>
-              <th style="text-align:right">Bruto hoje</th>
-              <th style="text-align:right">Rendimento</th>
-              <th style="text-align:right">IR</th>
-              <th style="text-align:right">Saldo líquido</th>
-              <th>Vencimento</th>
-            </tr></thead>
-            <tbody>{corpo}</tbody>
-          </table>
-          </div>
-        </div>
-
-        {bloco_hist}
-      </div>
-    </body></html>
-    """
+    return render_template(
+        "investimentos.html",
+        sincronizado=True,
+        ativos=ativos,
+        encerrados=len(posicoes) - len(ativos),
+        saldo_total=sum(a["saldo"] for a in ativos),
+        aplicado_total=aplicado_total,
+        rendimento_bruto=rendimento_bruto,
+        rend_pct=(rendimento_bruto / aplicado_total * 100) if aplicado_total else 0,
+        ir_total=sum(a["impostos"] for a in ativos),
+        historico=hist,
+        **contexto,
+    )
 
 
 @app.route("/contas", methods=["GET", "POST"])
