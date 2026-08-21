@@ -1193,6 +1193,21 @@ BASE_CSS = BASE_CSS_HEAD + """
   table.compacta .cel-dim { width: 116px; }
   table.compacta select { width: 100%; max-width: 100%; padding: 4px 5px; font-size: 11.5px; border-radius: 5px; }
   table.compacta .obs-input { padding: 4px 6px; font-size: 11.5px; }
+
+  /* ---------- colunas ajustaveis: redimensionar, reordenar, ordenar ---------- */
+  table.ajustavel th[data-col] {
+    position: relative; cursor: grab; user-select: none;
+  }
+  table.ajustavel th[data-col]:active { cursor: grabbing; }
+  table.ajustavel th[data-col].arrastando { opacity: .4; }
+  table.ajustavel th[data-col].arrastar-sobre { box-shadow: inset 2px 0 0 var(--accent); }
+  table.ajustavel th[data-col] .col-resize-handle {
+    position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize;
+    z-index: 5;
+  }
+  table.ajustavel th[data-col] .col-resize-handle:hover { background: var(--accent-soft); }
+  table.ajustavel th[data-col].sort-asc::after { content: " ▲"; font-size: 9px; color: var(--accent); }
+  table.ajustavel th[data-col].sort-desc::after { content: " ▼"; font-size: 9px; color: var(--accent); }
   table.compacta input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); }
 
   /* ---------- chips dos filtros selecionados ---------- */
@@ -1804,9 +1819,11 @@ def index():
             sinal = "-" if r["tipo"] == "DEBIT" else "+"
             cor_valor = "color:#c23c34" if r["tipo"] == "DEBIT" else "color:#1f8a53"
             valor_fmt = f'{sinal} R$ {abs(r["valor"]):,.2f}'
+            valor_sort = -abs(r["valor"]) if sinal == "-" else abs(r["valor"])
         else:
             cor_valor = ""
             valor_fmt = f'R$ {r["valor"]:,.2f}'
+            valor_sort = r["valor"]
 
         dim_tds = []
         dim_detalhes = {}
@@ -1815,7 +1832,7 @@ def index():
             faltando = d["obrigatoria"] and not valor_sel
             estilo = ' style="border-color:#c23c34;background:#fbeceb"' if faltando else ""
             dim_tds.append(
-                f'<td class="cel-dim"><select class="dim-select" data-dim="{d["id"]}"{estilo}{dis_editar} '
+                f'<td class="cel-dim" data-col="dim_{d["id"]}"><select class="dim-select" data-dim="{d["id"]}"{estilo}{dis_editar} '
                 f'onchange="salvar(\'{rid}\', this)">{dim_options(d["id"], valor_sel)}</select></td>'
             )
             nomes_valor = {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
@@ -1823,16 +1840,16 @@ def index():
 
         trs.append(
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
-            f'<td class="cel-data" data-tip="{data_fmt_full}">{data_fmt}</td>'
-            f'<td class="cel-desc" data-tip="{desc_esc}">{desc_esc}</td>'
-            f'<td class="cel-origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
-            f'<td class="cel-dim"><select class="cat-select"{dis_editar} onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
+            f'<td class="cel-data" data-col="data" data-tip="{data_fmt_full}" data-sort="{data_local.timestamp()}">{data_fmt}</td>'
+            f'<td class="cel-desc" data-col="desc" data-tip="{desc_esc}">{desc_esc}</td>'
+            f'<td class="cel-origem" data-col="origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
+            f'<td class="cel-dim" data-col="categoria"><select class="cat-select"{dis_editar} onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
-            f'<td class="valor cel-valor" style="{cor_valor}">{valor_fmt}</td>'
-            f'<td class="cel-obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..."{dis_editar} onblur="salvar(\'{rid}\', this)"></td>'
-            f'<td class="cel-check"><input class="conf-check" type="checkbox" {checked}{dis_conferir} onchange="salvar(\'{rid}\', this)">'
+            f'<td class="valor cel-valor" data-col="valor" style="{cor_valor}" data-sort="{valor_sort}">{valor_fmt}</td>'
+            f'<td class="cel-obs" data-col="obs"><input class="obs-input" type="text" value="{obs}" placeholder="obs..."{dis_editar} onblur="salvar(\'{rid}\', this)"></td>'
+            f'<td class="cel-check" data-col="check"><input class="conf-check" type="checkbox" {checked}{dis_conferir} onchange="salvar(\'{rid}\', this)">'
             f'<input class="dup-check" type="checkbox" {dup_checked} hidden></td>'
-            f'<td class="cel-status"><span class="status" id="status-{rid}">ok</span></td>'
+            f'<td class="cel-status" data-col="status"><span class="status" id="status-{rid}">ok</span></td>'
             f'</tr>'
         )
         detalhes = {
@@ -1863,7 +1880,7 @@ def index():
     cor_resultado = "#1f8a53" if resultado_mes >= 0 else "#c23c34"
     colspan_total = 8 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th class="cel-dim">{esc(d["nome"])}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
+    dim_headers = "".join(f'<th class="cel-dim" data-col="dim_{d["id"]}">{esc(d["nome"])}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -1929,10 +1946,14 @@ def index():
           <div class="det-body">{cat_rows_html}</div>
         </details>
 
+        <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+          <button type="button" class="ver-btn" onclick="redefinirColunas('lancamentos')"
+                  title="Volta a ordem, largura e ordenação das colunas ao padrão">↺ Redefinir colunas</button>
+        </div>
         <div class="tabela-scroll">
-        <table class="compacta">
+        <table class="compacta ajustavel" id="tabela-lancamentos">
           <thead><tr>
-            <th class="cel-data">Data</th><th class="cel-desc">Descricao</th><th class="cel-origem">Origem</th><th class="cel-dim">Categoria</th>{dim_headers}<th class="cel-valor" style="text-align:right">Valor</th><th class="cel-obs">Obs</th><th class="cel-check">Conf</th><th class="cel-status"></th>
+            <th class="cel-data" data-col="data">Data</th><th class="cel-desc" data-col="desc">Descricao</th><th class="cel-origem" data-col="origem">Origem</th><th class="cel-dim" data-col="categoria">Categoria</th>{dim_headers}<th class="cel-valor" data-col="valor" style="text-align:right">Valor</th><th class="cel-obs" data-col="obs">Obs</th><th class="cel-check" data-col="check">Conf</th><th class="cel-status" data-col="status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
@@ -2240,6 +2261,159 @@ def index():
           return false;
         }}
         atualizarChipLabels();
+
+        // ---- colunas ajustaveis: redimensionar, reordenar, ordenar por clique ----
+        // Preferencias (ordem, largura, ordenacao) ficam salvas no navegador (localStorage),
+        // por tabela - cada tela chama ativarTabelaAjustavel com sua propria chave.
+        function redefinirColunas(chave) {{
+          localStorage.removeItem('pedemeia_tabela_' + chave);
+          window.location.reload();
+        }}
+        function ativarTabelaAjustavel(table, chave) {{
+          const thead = table.querySelector('thead tr');
+          const CHAVE = 'pedemeia_tabela_' + chave;
+
+          function estadoSalvo() {{
+            try {{ return JSON.parse(localStorage.getItem(CHAVE) || '{{}}'); }} catch (e) {{ return {{}}; }}
+          }}
+          const estado = estadoSalvo();
+
+          function colunasNaOrdemAtual() {{
+            return [...thead.querySelectorAll('th[data-col]')].map(th => th.dataset.col);
+          }}
+          function salvarEstado() {{ localStorage.setItem(CHAVE, JSON.stringify(estado)); }}
+
+          function aplicarLargura(col, px) {{
+            const th = thead.querySelector('th[data-col="' + col + '"]');
+            if (th) th.style.width = px + 'px';
+            table.querySelectorAll('td[data-col="' + col + '"]').forEach(td => {{ td.style.width = px + 'px'; }});
+          }}
+
+          function reordenarLinhas() {{
+            const ordem = colunasNaOrdemAtual();
+            table.querySelectorAll('tbody tr').forEach(tr => {{
+              const mapaTd = {{}};
+              tr.querySelectorAll('td[data-col]').forEach(td => {{ mapaTd[td.dataset.col] = td; }});
+              ordem.forEach(col => {{ if (mapaTd[col]) tr.appendChild(mapaTd[col]); }});
+            }});
+          }}
+
+          // ordem salva
+          if (estado.ordem && estado.ordem.length) {{
+            const mapaTh = {{}};
+            thead.querySelectorAll('th[data-col]').forEach(th => {{ mapaTh[th.dataset.col] = th; }});
+            estado.ordem.forEach(col => {{ if (mapaTh[col]) thead.appendChild(mapaTh[col]); }});
+            reordenarLinhas();
+          }}
+          // largura salva
+          if (estado.larguras) {{
+            Object.keys(estado.larguras).forEach(col => aplicarLargura(col, estado.larguras[col]));
+          }}
+
+          // redimensionar: alca na borda direita de cada th
+          thead.querySelectorAll('th[data-col]').forEach(th => {{
+            const alca = document.createElement('span');
+            alca.className = 'col-resize-handle';
+            alca.draggable = false;
+            th.appendChild(alca);
+            alca.addEventListener('mousedown', function (e) {{
+              e.preventDefault();
+              e.stopPropagation();
+              const startX = e.clientX;
+              const startWidth = th.getBoundingClientRect().width;
+              function mover(e2) {{
+                aplicarLargura(th.dataset.col, Math.max(40, startWidth + (e2.clientX - startX)));
+              }}
+              function soltar() {{
+                document.removeEventListener('mousemove', mover);
+                document.removeEventListener('mouseup', soltar);
+                estado.larguras = estado.larguras || {{}};
+                estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
+                salvarEstado();
+              }}
+              document.addEventListener('mousemove', mover);
+              document.addEventListener('mouseup', soltar);
+            }});
+          }});
+
+          // reordenar: arrastar o cabecalho pra esquerda/direita
+          let arrastando = null;
+          thead.querySelectorAll('th[data-col]').forEach(th => {{
+            th.draggable = true;
+            th.addEventListener('dragstart', function () {{
+              arrastando = th;
+              th.classList.add('arrastando');
+            }});
+            th.addEventListener('dragend', function () {{
+              th.classList.remove('arrastando');
+              thead.querySelectorAll('th[data-col]').forEach(t => t.classList.remove('arrastar-sobre'));
+            }});
+            th.addEventListener('dragover', function (e) {{
+              e.preventDefault();
+              if (th !== arrastando) th.classList.add('arrastar-sobre');
+            }});
+            th.addEventListener('dragleave', function () {{ th.classList.remove('arrastar-sobre'); }});
+            th.addEventListener('drop', function (e) {{
+              e.preventDefault();
+              th.classList.remove('arrastar-sobre');
+              if (!arrastando || arrastando === th) return;
+              const rect = th.getBoundingClientRect();
+              const antes = (e.clientX - rect.left) < rect.width / 2;
+              th.parentNode.insertBefore(arrastando, antes ? th : th.nextSibling);
+              reordenarLinhas();
+              estado.ordem = colunasNaOrdemAtual();
+              salvarEstado();
+            }});
+          }});
+
+          // ordenar: clicar no titulo da coluna (nao na alca de redimensionar)
+          function valorOrdenavel(td) {{
+            if (!td) return '';
+            if (td.dataset.sort !== undefined && td.dataset.sort !== '') return parseFloat(td.dataset.sort);
+            const sel = td.querySelector('select');
+            if (sel) return (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '').toLowerCase();
+            const inp = td.querySelector('input[type=text]');
+            if (inp) return inp.value.toLowerCase();
+            return td.textContent.trim().toLowerCase();
+          }}
+          function ordenarLinhas(col, dir) {{
+            const tbody = table.querySelector('tbody');
+            const linhas = [...tbody.querySelectorAll('tr')];
+            linhas.sort(function (a, b) {{
+              const va = valorOrdenavel(a.querySelector('td[data-col="' + col + '"]'));
+              const vb = valorOrdenavel(b.querySelector('td[data-col="' + col + '"]'));
+              const cmp = (typeof va === 'number' && typeof vb === 'number') ? va - vb : String(va).localeCompare(String(vb));
+              return dir === 'asc' ? cmp : -cmp;
+            }});
+            linhas.forEach(tr => tbody.appendChild(tr));
+          }}
+          function atualizarIndicadores() {{
+            thead.querySelectorAll('th[data-col]').forEach(th => {{
+              th.classList.remove('sort-asc', 'sort-desc');
+              if (estado.sort && estado.sort.col === th.dataset.col) {{
+                th.classList.add(estado.sort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+              }}
+            }});
+          }}
+          thead.querySelectorAll('th[data-col]').forEach(th => {{
+            th.addEventListener('click', function (e) {{
+              if (e.target.classList.contains('col-resize-handle')) return;
+              const col = th.dataset.col;
+              const dir = (estado.sort && estado.sort.col === col && estado.sort.dir === 'asc') ? 'desc' : 'asc';
+              estado.sort = {{ col: col, dir: dir }};
+              salvarEstado();
+              ordenarLinhas(col, dir);
+              atualizarIndicadores();
+            }});
+          }});
+
+          // ordenacao salva de uma sessao anterior
+          if (estado.sort) {{
+            ordenarLinhas(estado.sort.col, estado.sort.dir);
+          }}
+          atualizarIndicadores();
+        }}
+        ativarTabelaAjustavel(document.getElementById('tabela-lancamentos'), 'lancamentos');
       </script>
       <script type="application/json" data-detalhes>{json_script(detalhes_js)}</script>
     </body></html>
