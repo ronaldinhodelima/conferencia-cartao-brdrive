@@ -13,7 +13,7 @@ import unicodedata
 import uuid
 import urllib.request
 import urllib.error
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -969,8 +969,22 @@ def _montar_filtro_relatorio(dimensoes):
     categorias_sel = request.args.getlist("categoria")
     cartoes_sel = request.args.getlist("cartao")
     origens_sel = request.args.getlist("origem")
-    data_ini = request.args.get("data_ini") or ""
-    data_fim = request.args.get("data_fim") or ""
+    # a data vai como parametro para o Postgres, que rejeita texto invalido com
+    # erro - e o endpoint AJAX virava 500, deixando a tela em "Carregando..."
+    # para sempre. Data que nao for AAAA-MM-DD e tratada como filtro nao
+    # preenchido, que e o comportamento util aqui.
+    def _data_valida(valor):
+        valor = (valor or "").strip()
+        if not valor:
+            return ""
+        try:
+            datetime.strptime(valor, "%Y-%m-%d")
+        except ValueError:
+            return ""
+        return valor
+
+    data_ini = _data_valida(request.args.get("data_ini"))
+    data_fim = _data_valida(request.args.get("data_fim"))
     agrupar = request.args.get("agrupar") or "categoria"
     dim_sel = {}
     for d in dimensoes:
@@ -1028,11 +1042,14 @@ def _montar_filtro_relatorio(dimensoes):
         group_expr = "t.account_id::text"
     elif agrupar == "mes":
         group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
-    elif agrupar.startswith("dim_"):
-        dim_id_grp = agrupar.split("_", 1)[1]
+    elif agrupar.startswith("dim_") and agrupar.split("_", 1)[1].isdigit():
+        # o int() ja impede injecao, mas sozinho ele estoura ValueError (500) em
+        # "agrupar=dim_abc", que qualquer um alcanca editando a URL. Com o isdigit
+        # na condicao, entrada invalida cai no else e vira o agrupamento padrao.
+        dim_id_grp = int(agrupar.split("_", 1)[1])
         join_extra = (
             f"LEFT JOIN cartao.transacao_dimensao tdg ON tdg.transacao_id = t.transacao_id::text "
-            f"AND tdg.dimensao_id = {int(dim_id_grp)} LEFT JOIN cartao.dimensao_valor dvg ON dvg.id = tdg.valor_id"
+            f"AND tdg.dimensao_id = {dim_id_grp} LEFT JOIN cartao.dimensao_valor dvg ON dvg.id = tdg.valor_id"
         )
         group_expr = "COALESCE(dvg.nome, '(nao definido)')"
     else:

@@ -8,6 +8,7 @@ erro nenhum, so nome errado na tela.
 
 Por isso o teste olha a identidade do objeto, nao so o conteudo.
 """
+import app
 import core
 
 
@@ -71,3 +72,46 @@ def test_falha_de_banco_nao_zera_o_que_ja_estava_carregado(monkeypatch):
     core.recarregar_categorias_db()
     # se o banco cai, a tela continua mostrando os nomes que ja tinha
     assert core.CATEGORIA_PT_DB["Groceries"] == "Mercado"
+
+
+class TestFiltroRelatorio:
+    """_montar_filtro_relatorio le direto da querystring, entao precisa aguentar
+    qualquer coisa que chegue pela URL sem estourar."""
+
+    def _cfg(self, qs):
+        with app.app.test_request_context(qs):
+            return core._montar_filtro_relatorio([])
+
+    def test_agrupar_invalido_cai_no_padrao_em_vez_de_estourar(self):
+        for ruim in ("dim_abc", "dim_", "dim_1;DROP TABLE x--", "xxx", ""):
+            cfg = self._cfg(f"/relatorios/dados?agrupar={ruim}")
+            assert cfg["agrupar"] == "categoria"
+            assert cfg["group_expr"] == "t.categoria"
+
+    def test_agrupar_por_dimensao_valida_continua_funcionando(self):
+        cfg = self._cfg("/relatorios/dados?agrupar=dim_7")
+        assert cfg["agrupar"] == "dim_7"
+        assert "tdg.dimensao_id = 7" in cfg["join_extra"]
+
+    def test_dimensao_nao_numerica_nunca_entra_na_sql(self):
+        cfg = self._cfg("/relatorios/dados?agrupar=dim_1 OR 1=1")
+        assert "OR 1=1" not in cfg["join_extra"]
+
+    def test_data_invalida_vira_filtro_vazio_em_vez_de_500(self):
+        # o Postgres rejeita texto que nao e data e o endpoint AJAX virava 500,
+        # deixando a tela presa em "Carregando..."
+        for ruim in ("abc", "2026-99-99", "2026-02-30", "'; DROP TABLE x--", "  "):
+            cfg = self._cfg(f"/relatorios/dados?data_ini={ruim}&data_fim={ruim}")
+            assert cfg["data_ini"] == ""
+            assert cfg["data_fim"] == ""
+
+    def test_data_valida_passa_inteira(self):
+        cfg = self._cfg("/relatorios/dados?data_ini=2026-07-01&data_fim=2026-07-31")
+        assert cfg["data_ini"] == "2026-07-01"
+        assert cfg["data_fim"] == "2026-07-31"
+
+    def test_data_sem_zero_a_esquerda_e_aceita(self):
+        # "2026-7-1" e data valida para o strptime e para o Postgres; nao ha
+        # motivo para recusar so porque o <input type=date> nunca gera assim
+        cfg = self._cfg("/relatorios/dados?data_ini=2026-7-1")
+        assert cfg["data_ini"] == "2026-7-1"
