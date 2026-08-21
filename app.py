@@ -4396,6 +4396,32 @@ def contas_view():
     """
 
 
+@app.route("/api/categoria-lancamentos")
+@requer("cadastros")
+def api_categoria_lancamentos():
+    """Lista os lancamentos de uma categoria - usado pelo botao 'protegida' em /categorias,
+    pra mostrar o que esta impedindo a remocao sem precisar ir pra tela de Lancamentos."""
+    categoria = request.args.get("categoria") or ""
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT t.data_transacao, t.descricao, COALESCE(t.valor_brl, t.valor_original) AS valor "
+        "FROM cartao.transacao t WHERE t.categoria = %s ORDER BY t.data_transacao DESC LIMIT 300;",
+        (categoria,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify([
+        {
+            "data": (r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y") if r["data_transacao"] else "-",
+            "descricao": r["descricao"] or "-",
+            "valor": float(r["valor"]) if r["valor"] is not None else 0,
+        }
+        for r in rows
+    ])
+
+
 @app.route("/categorias", methods=["GET", "POST"])
 @requer("cadastros")
 def categorias_view():
@@ -4518,8 +4544,10 @@ def categorias_view():
             f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="categoria" value="{esc(c)}">'
             f'<button type="submit" class="ver-btn">Remover</button></form>'
             if pode_excluir else
-            f'<span data-tip="Existem lançamentos nessa categoria. Mova-os para outra categoria antes de remover." '
-            f'style="font-size:11px;color:var(--ink-faint);cursor:help">{qtd} lanç. — protegida</span>'
+            f'<button type="button" data-categoria="{esc(c)}" onclick="verLancamentosCategoria(this)" '
+            f'data-tip="Existem lançamentos nessa categoria. Clique para ver quais são." '
+            f'style="font-size:11px;color:var(--ink-faint);background:none;border:none;padding:0;'
+            f'text-decoration:underline;cursor:pointer">{qtd} lanç. — protegida</button>'
         )
         nat = naturezas_atuais.get(c, NATUREZA_PADRAO)
         opts_natureza = "".join(
@@ -4607,6 +4635,46 @@ def categorias_view():
           </table>
         </div>
       </div>
+
+      <div class="modal-bg" id="modalLancBg" onclick="if(event.target===this) fecharModalLanc()">
+        <div class="modal" style="width:520px">
+          <span class="close" onclick="fecharModalLanc()">&times;</span>
+          <h3 id="modalLancTitulo">Lançamentos</h3>
+          <div id="modalLancBody" style="max-height:60vh;overflow-y:auto"></div>
+        </div>
+      </div>
+      <script>
+        function escHtml(s) {{
+          return String(s ?? '').replace(/[&<>"']/g, c => ({{
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+          }})[c]);
+        }}
+        function fecharModalLanc() {{
+          document.getElementById('modalLancBg').classList.remove('show');
+        }}
+        function verLancamentosCategoria(btn) {{
+          const categoria = btn.dataset.categoria;
+          const corpo = document.getElementById('modalLancBody');
+          document.getElementById('modalLancTitulo').textContent = 'Lançamentos — ' + btn.closest('tr').querySelector('input[name=novo_nome]').value;
+          corpo.innerHTML = '<div style="padding:12px 0;color:var(--ink-faint);font-size:13px">Carregando…</div>';
+          document.getElementById('modalLancBg').classList.add('show');
+          fetch('/api/categoria-lancamentos?categoria=' + encodeURIComponent(categoria))
+            .then(r => r.json())
+            .then(lista => {{
+              if (!lista.length) {{
+                corpo.innerHTML = '<div style="padding:12px 0;color:var(--ink-faint);font-size:13px">Nenhum lançamento encontrado.</div>';
+                return;
+              }}
+              corpo.innerHTML = lista.map(l =>
+                '<div class="row"><span>' + escHtml(l.data) + ' — ' + escHtml(l.descricao) + '</span>' +
+                '<span>R$ ' + l.valor.toLocaleString('pt-BR', {{minimumFractionDigits:2, maximumFractionDigits:2}}) + '</span></div>'
+              ).join('');
+            }})
+            .catch(() => {{
+              corpo.innerHTML = '<div style="padding:12px 0;color:var(--bad)">Erro ao carregar os lançamentos.</div>';
+            }});
+        }}
+      </script>
     </body></html>
     """
 
