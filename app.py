@@ -991,6 +991,14 @@ def migrate():
             cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (1);")
             conn.commit()
 
+        if versao_atual < 2:
+            # teto de gasto passa a ser por valor de dimensao (ex: "Ronaldo: R$3000/mes"),
+            # nao mais por centro de custo - ver conversa que motivou essa mudanca.
+            cur.execute("ALTER TABLE cartao.dimensao_valor ADD COLUMN IF NOT EXISTS teto_mensal numeric;")
+            cur.execute("ALTER TABLE cartao.dimensao_valor ADD COLUMN IF NOT EXISTS teto_anual numeric;")
+            cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (2);")
+            conn.commit()
+
         cur.close()
         conn.close()
     except Exception as e:
@@ -2509,9 +2517,17 @@ def dimensoes_view():
                     conn.rollback()
                     erro = f"Ja existe o valor '{esc(nome)}' nessa dimensao."
         elif acao == "editar_valor":
+            def to_num(v):
+                v = (v or "").strip().replace(",", ".")
+                return float(v) if v else None
             cur.execute(
-                "UPDATE cartao.dimensao_valor SET nome=%s WHERE id=%s;",
-                ((request.form.get("nome") or "").strip(), request.form.get("valor_id")),
+                "UPDATE cartao.dimensao_valor SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
+                (
+                    (request.form.get("nome") or "").strip(),
+                    to_num(request.form.get("teto_mensal")),
+                    to_num(request.form.get("teto_anual")),
+                    request.form.get("valor_id"),
+                ),
             )
             conn.commit()
         elif acao == "excluir_valor":
@@ -2520,8 +2536,23 @@ def dimensoes_view():
 
     cur.execute("SELECT id, nome, obrigatoria, ordem FROM cartao.dimensao ORDER BY ordem, nome;")
     dims = cur.fetchall()
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    cur.execute("SELECT id, dimensao_id, nome, teto_mensal, teto_anual FROM cartao.dimensao_valor ORDER BY nome;")
     valores_db = cur.fetchall()
+
+    # gasto do mes e do ano corrente por valor de dimensao, pra comparar com o teto
+    mes_atual = datetime.now().strftime("%Y-%m")
+    ano_atual = datetime.now().strftime("%Y")
+    cur.execute(
+        "SELECT td.valor_id, "
+        f"SUM(CASE WHEN to_char(t.data_transacao,'YYYY-MM') = %s THEN {VAL_DESPESA} ELSE 0 END) AS gasto_mes, "
+        f"SUM(CASE WHEN to_char(t.data_transacao,'YYYY') = %s THEN {VAL_DESPESA} ELSE 0 END) AS gasto_ano "
+        f"FROM cartao.transacao_dimensao td "
+        f"JOIN cartao.transacao t ON t.transacao_id::text = td.transacao_id {JOIN_NATUREZA} "
+        f"WHERE {NATUREZA_SQL} = 'despesa' AND COALESCE(t.duplicada, false) = false "
+        "GROUP BY td.valor_id;",
+        (mes_atual, ano_atual),
+    )
+    gasto_por_valor = {r["valor_id"]: r for r in cur.fetchall()}
     cur.close()
     conn.close()
 
@@ -2529,19 +2560,49 @@ def dimensoes_view():
     for v in valores_db:
         valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
 
+    def linha_valor(v):
+        gasto = gasto_por_valor.get(v["id"], {})
+        gasto_mes = float(gasto.get("gasto_mes") or 0)
+        gasto_ano = float(gasto.get("gasto_ano") or 0)
+        teto_mensal = float(v["teto_mensal"]) if v["teto_mensal"] is not None else None
+        teto_anual = float(v["teto_anual"]) if v["teto_anual"] is not None else None
+        barra_mensal = _barra_html(gasto_mes, teto_mensal)
+        barra_anual = _barra_html(gasto_ano, teto_anual)
+        progresso = (
+            f'<div style="font-size:11.5px;color:var(--ink-faint)">'
+            f'{_fmt_moeda(gasto_mes)} este mês{" de " + _fmt_moeda(teto_mensal) if teto_mensal else ""}</div>{barra_mensal}'
+            if teto_mensal else
+            (f'<div style="font-size:11.5px;color:var(--ink-faint)">{_fmt_moeda(gasto_mes)} este mês</div>' if gasto_mes else "")
+        )
+        progresso_ano = (
+            f'<div style="font-size:11.5px;color:var(--ink-faint);margin-top:4px">'
+            f'{_fmt_moeda(gasto_ano)} este ano de {_fmt_moeda(teto_anual)}</div>{barra_anual}'
+            if teto_anual else ""
+        )
+        return (
+            f'<tr><td style="padding-left:24px">'
+            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+            f'<input type="hidden" name="acao" value="editar_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
+            f'<input name="nome" value="{esc(v["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
+            f'<span style="font-size:12px;color:#888">teto mensal</span>'
+            f'<input name="teto_mensal" value="{"" if teto_mensal is None else f"{teto_mensal:g}"}" placeholder="opcional" '
+            f'style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
+            f'<span style="font-size:12px;color:#888">teto anual</span>'
+            f'<input name="teto_anual" value="{"" if teto_anual is None else f"{teto_anual:g}"}" placeholder="opcional" '
+            f'style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
+            f'<button type="submit" class="ver-btn">Salvar</button>'
+            f'</form>{progresso}{progresso_ano}'
+            f'</td>'
+            f'<td style="vertical-align:top"><form method="post" onsubmit="return confirm(\'Excluir este valor?\')">'
+            f'<input type="hidden" name="acao" value="excluir_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
+            f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
+        )
+
     blocos = []
     for d in dims:
         valores = valores_por_dim.get(d["id"], [])
         valores_rows = "".join(
-            f'<tr><td style="padding-left:24px">'
-            f'<form method="post" style="display:flex;gap:8px;align-items:center">'
-            f'<input type="hidden" name="acao" value="editar_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
-            f'<input name="nome" value="{esc(v["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">'
-            f'<button type="submit" class="ver-btn">Salvar</button>'
-            f'</form></td>'
-            f'<td><form method="post" onsubmit="return confirm(\'Excluir este valor?\')">'
-            f'<input type="hidden" name="acao" value="excluir_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
-            f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
+            linha_valor(v)
             for v in valores
         ) or '<tr><td colspan="2" style="padding-left:24px;color:#888;font-size:13px">Nenhum valor cadastrado ainda.</td></tr>'
 
@@ -2583,6 +2644,8 @@ def dimensoes_view():
           Dimensoes sao classificacoes independentes do Centro de Custo, aplicadas a cada lancamento
           (ex: <strong>Responsavel</strong> - quem gastou, <strong>Projeto/Evento</strong> - a qual viagem ou evento pertence).
           Dimensoes marcadas como obrigatorias impedem confirmar (marcar como conferida) um lancamento sem esse vinculo preenchido.
+          Cada valor pode ter um <strong>teto de gasto</strong> mensal e/ou anual (ex: "Ronaldo: R$3.000/mes") -
+          o progresso do mes/ano corrente aparece embaixo do valor assim que houver um teto e algum gasto vinculado.
         </div>
         <div class="cat-breakdown">
           <h3>Nova dimensao</h3>
@@ -2826,10 +2889,6 @@ def _barra_html(realizado, teto):
 def dre():
     ano = request.args.get("ano") or str(datetime.now().year)
     hoje = datetime.now()
-    ano_atual = str(hoje.year)
-    eh_ano_atual = ano == ano_atual
-    dia_do_ano = hoje.timetuple().tm_yday if eh_ano_atual else 365
-    mes_atual_str = hoje.strftime("%Y-%m")
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2843,16 +2902,6 @@ def dre():
         (ano,),
     )
     anual_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
-
-    mensal_por_cat = {}
-    if eh_ano_atual:
-        cur.execute(
-            f"SELECT t.categoria, SUM({VAL_DESPESA}) AS total {base} "
-            f"AND to_char(t.data_transacao,'YYYY-MM') = %s AND {NATUREZA_SQL} = 'despesa' "
-            "AND t.categoria IS NOT NULL GROUP BY t.categoria;",
-            (mes_atual_str,),
-        )
-        mensal_por_cat = {r["categoria"]: float(r["total"]) for r in cur.fetchall()}
 
     # ---- DRE propriamente dito: receitas, despesas e resultado de cada mes do ano ----
     cur.execute(
@@ -2873,8 +2922,8 @@ def dre():
             m[r["natureza"]] += v       # positivo = dinheiro aplicado/investido no bem
 
     cur.execute(
-        "SELECT g.id AS grupo_id, g.nome AS grupo_nome, g.teto_mensal AS g_teto_mensal, g.teto_anual AS g_teto_anual, "
-        "s.id AS subgrupo_id, s.nome AS subgrupo_nome, s.teto_mensal AS s_teto_mensal, s.teto_anual AS s_teto_anual, "
+        "SELECT g.id AS grupo_id, g.nome AS grupo_nome, "
+        "s.id AS subgrupo_id, s.nome AS subgrupo_nome, "
         "cs.categoria "
         "FROM cartao.grupo_custo g "
         "JOIN cartao.subgrupo_custo s ON s.grupo_id = g.id "
@@ -2907,11 +2956,11 @@ def dre():
     categorias_mapeadas = set()
     for r in linhas_map:
         g = grupos.setdefault(r["grupo_id"], {
-            "nome": r["grupo_nome"], "teto_mensal": r["g_teto_mensal"], "teto_anual": r["g_teto_anual"],
+            "nome": r["grupo_nome"],
             "subgrupos": {},
         })
         s = g["subgrupos"].setdefault(r["subgrupo_id"], {
-            "nome": r["subgrupo_nome"], "teto_mensal": r["s_teto_mensal"], "teto_anual": r["s_teto_anual"],
+            "nome": r["subgrupo_nome"],
             "categorias": [],
         })
         if r["categoria"]:
@@ -2924,30 +2973,10 @@ def dre():
     total_geral_anual = 0.0
     for g in sorted(grupos.values(), key=lambda x: chave_alfa(x["nome"])):
         g_anual = 0.0
-        g_mensal = 0.0
         subs_html = []
         for s in sorted(g["subgrupos"].values(), key=lambda x: chave_alfa(x["nome"])):
             s_anual = sum(anual_por_cat.get(c, 0.0) for c in s["categorias"])
-            s_mensal = sum(mensal_por_cat.get(c, 0.0) for c in s["categorias"])
             g_anual += s_anual
-            g_mensal += s_mensal
-            projecao = (s_anual / dia_do_ano * 365) if eh_ano_atual and dia_do_ano else s_anual
-            alerta = ""
-            if s["teto_anual"] and projecao > float(s["teto_anual"]):
-                alerta = f'<div style="font-size:11px;color:#c0392b;margin-top:2px">⚠ projecao ({_fmt_moeda(projecao)}) estoura o teto anual</div>'
-            teto_anual_html = ""
-            if s["teto_anual"]:
-                teto_anual_html = (
-                    f'<div style="font-size:12px;color:#888">Teto anual: {_fmt_moeda(float(s["teto_anual"]))}</div>'
-                    f'{_barra_html(s_anual, float(s["teto_anual"]))}'
-                )
-            teto_mensal_html = ""
-            if s["teto_mensal"] and eh_ano_atual:
-                teto_mensal_html = (
-                    f'<div style="font-size:12px;color:#888;margin-top:6px">Teto mensal: {_fmt_moeda(float(s["teto_mensal"]))} '
-                    f'(realizado no mes: {_fmt_moeda(s_mensal)})</div>'
-                    f'{_barra_html(s_mensal, float(s["teto_mensal"]))}'
-                )
             cats_pt = ", ".join(cat_pt(c) for c in s["categorias"]) or "sem categorias vinculadas"
             subs_html.append(
                 f'<div style="padding:10px 0;border-top:1px solid #f2f2f2">'
@@ -2956,17 +2985,15 @@ def dre():
                 f'<span style="font-size:14px">{_fmt_moeda(s_anual)} no ano</span>'
                 f'</div>'
                 f'<div style="font-size:11px;color:#aaa;margin-top:2px">{cats_pt}</div>'
-                f'{teto_anual_html}{teto_mensal_html}{alerta}'
                 f'</div>'
             )
         total_geral_anual += g_anual
-        teto_grupo_html = f'{_barra_html(g_anual, float(g["teto_anual"]))}' if g["teto_anual"] else ""
         blocos.append(
             f'<div class="cat-breakdown">'
             f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
             f'<h3 style="margin:0">{g["nome"]}</h3>'
             f'<span style="font-size:18px;font-weight:600">{_fmt_moeda(g_anual)}</span>'
-            f'</div>{teto_grupo_html}'
+            f'</div>'
             f'{"".join(subs_html)}'
             f'</div>'
         )
@@ -3081,33 +3108,29 @@ def grupos_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    def to_num(v):
-        v = (v or "").strip().replace(",", ".")
-        return float(v) if v else None
-
     if request.method == "POST":
         acao = request.form.get("acao")
         if acao == "criar_grupo":
             cur.execute(
-                "INSERT INTO cartao.grupo_custo (nome, teto_mensal, teto_anual) VALUES (%s,%s,%s);",
-                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual"))),
+                "INSERT INTO cartao.grupo_custo (nome) VALUES (%s);",
+                (request.form.get("nome", "").strip(),),
             )
         elif acao == "editar_grupo":
             cur.execute(
-                "UPDATE cartao.grupo_custo SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
-                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual")), request.form.get("grupo_id")),
+                "UPDATE cartao.grupo_custo SET nome=%s WHERE id=%s;",
+                (request.form.get("nome", "").strip(), request.form.get("grupo_id")),
             )
         elif acao == "excluir_grupo":
             cur.execute("DELETE FROM cartao.grupo_custo WHERE id=%s;", (request.form.get("grupo_id"),))
         elif acao == "criar_subgrupo":
             cur.execute(
-                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome, teto_mensal, teto_anual) VALUES (%s,%s,%s,%s);",
-                (request.form.get("grupo_id"), request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual"))),
+                "INSERT INTO cartao.subgrupo_custo (grupo_id, nome) VALUES (%s,%s);",
+                (request.form.get("grupo_id"), request.form.get("nome", "").strip()),
             )
         elif acao == "editar_subgrupo":
             cur.execute(
-                "UPDATE cartao.subgrupo_custo SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
-                (request.form.get("nome", "").strip(), to_num(request.form.get("teto_mensal")), to_num(request.form.get("teto_anual")), request.form.get("subgrupo_id")),
+                "UPDATE cartao.subgrupo_custo SET nome=%s WHERE id=%s;",
+                (request.form.get("nome", "").strip(), request.form.get("subgrupo_id")),
             )
         elif acao == "excluir_subgrupo":
             cur.execute("DELETE FROM cartao.subgrupo_custo WHERE id=%s;", (request.form.get("subgrupo_id"),))
@@ -3120,9 +3143,9 @@ def grupos_view():
             )
         conn.commit()
 
-    cur.execute("SELECT id, nome, teto_mensal, teto_anual FROM cartao.grupo_custo;")
+    cur.execute("SELECT id, nome FROM cartao.grupo_custo;")
     grupos_db = sorted(cur.fetchall(), key=lambda g: chave_alfa(g["nome"]))
-    cur.execute("SELECT id, grupo_id, nome, teto_mensal, teto_anual FROM cartao.subgrupo_custo;")
+    cur.execute("SELECT id, grupo_id, nome FROM cartao.subgrupo_custo;")
     subgrupos_db = sorted(cur.fetchall(), key=lambda s: chave_alfa(s["nome"]))
     cur.execute("SELECT categoria, subgrupo_id FROM cartao.categoria_subgrupo;")
     mapa_categoria = {r["categoria"]: r["subgrupo_id"] for r in cur.fetchall()}
@@ -3143,14 +3166,6 @@ def grupos_view():
         if sid:
             categorias_por_subgrupo.setdefault(sid, []).append(c)
     categorias_sem_vinculo = [c for c in todas_categorias if not mapa_categoria.get(c)]
-
-    def input_num(nome, valor):
-        v = "" if valor is None else f"{float(valor):g}"
-        return f'<input name="{nome}" value="{v}" placeholder="opcional" style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
-
-    def hidden_num(nome, valor):
-        v = "" if valor is None else f"{float(valor):g}"
-        return f'<input type="hidden" name="{nome}" value="{v}">'
 
     def chip_categoria(c):
         """Categoria ja vinculada a este subgrupo - clicar no x desvincula (some para 'sem centro de custo')."""
@@ -3187,16 +3202,14 @@ def grupos_view():
         subs = subgrupos_por_grupo.get(g["id"], [])
         linhas_html.append(f"""
         <tr style="background:var(--bg)">
-          <td colspan="4" style="padding-top:16px">
-            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <td colspan="2" style="padding-top:18px">
+            <form method="post" style="display:flex;gap:8px;align-items:center">
               <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" value="{esc(g["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
-              <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
-              <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
+              <input name="nome" value="{esc(g["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:700;font-size:14px;width:260px">
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
           </td>
-          <td style="padding-top:16px">
+          <td style="padding-top:18px">
             <form method="post" onsubmit="return confirm('Excluir centro de custo e seus subgrupos?')">
               <input type="hidden" name="acao" value="excluir_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
               <button type="submit" class="ver-btn">Excluir</button>
@@ -3208,29 +3221,11 @@ def grupos_view():
             chips = "".join(chip_categoria(c) for c in categorias_por_subgrupo.get(s["id"], []))
             linhas_html.append(f"""
             <tr>
-              <td style="padding-left:24px">
+              <td style="padding-left:22px;border-left:2px solid var(--line);position:relative">
+                <span style="position:absolute;left:6px;color:var(--ink-faint);font-size:13px">└</span>
                 <form method="post" style="display:flex;gap:6px;align-items:center">
                   <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
-                  <input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:180px">
-                  {hidden_num("teto_mensal", s["teto_mensal"])}{hidden_num("teto_anual", s["teto_anual"])}
-                  <button type="submit" class="ver-btn">Salvar</button>
-                </form>
-              </td>
-              <td>
-                <form method="post" style="display:flex;gap:6px;align-items:center">
-                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
-                  <input type="hidden" name="nome" value="{esc(s["nome"])}">
-                  {input_num("teto_mensal", s["teto_mensal"])}
-                  {hidden_num("teto_anual", s["teto_anual"])}
-                  <button type="submit" class="ver-btn">Salvar</button>
-                </form>
-              </td>
-              <td>
-                <form method="post" style="display:flex;gap:6px;align-items:center">
-                  <input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">
-                  <input type="hidden" name="nome" value="{esc(s["nome"])}">
-                  {hidden_num("teto_mensal", s["teto_mensal"])}
-                  {input_num("teto_anual", s["teto_anual"])}
+                  <input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
                   <button type="submit" class="ver-btn">Salvar</button>
                 </form>
               </td>
@@ -3247,11 +3242,10 @@ def grupos_view():
             """)
         linhas_html.append(f"""
         <tr>
-          <td colspan="5" style="padding-left:24px;padding-bottom:14px">
-            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <td colspan="3" style="padding-left:22px;border-left:2px solid var(--line);padding-bottom:16px">
+            <form method="post" style="display:flex;gap:8px;align-items:center">
               <input type="hidden" name="acao" value="criar_subgrupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:180px">
-              {input_num("teto_mensal", None)}{input_num("teto_anual", None)}
+              <input name="nome" placeholder="Novo subgrupo" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
               <button type="submit" class="ver-btn">+ Adicionar subgrupo</button>
             </form>
           </td>
@@ -3285,32 +3279,33 @@ def grupos_view():
             <strong>Categoria</strong> vem do banco/Pluggy (ex: "Mercado", "Restaurantes") — é o que classifica cada
             lançamento individualmente, em <a href="/categorias">Gerenciar categorias</a>.
             <strong>Centro de Custo</strong> é uma camada acima, criada por você, pra agrupar várias categorias
-            parecidas (ex: o centro de custo "Alimentação" pode juntar as categorias "Mercado" e "Restaurantes")
-            e opcionalmente colocar um teto de gasto mensal/anual nesse grupo.
+            parecidas (ex: o centro de custo "Alimentação" pode juntar as categorias "Mercado" e "Restaurantes").
             Cada categoria pode estar vinculada a no máximo um subgrupo — é esse vínculo que você edita abaixo,
-            na coluna "Categorias vinculadas". Para classificar por pessoa, projeto/evento ou outra dimensão
-            independente da categoria, use <a href="/dimensoes">Gerenciar dimensões</a> em vez disso.
+            na coluna "Categorias vinculadas". Um <strong>centro de custo</strong> tem um ou mais
+            <strong>subgrupos</strong> (a árvore abaixo mostra isso: cada subgrupo aparece recuado, ligado por
+            uma linha ao centro de custo dele). Para classificar por pessoa, projeto/evento ou outra dimensão
+            independente da categoria — inclusive definir um <strong>teto de gasto</strong> por pessoa ou projeto —
+            use <a href="/dimensoes">Gerenciar dimensões</a> em vez disso.
           </div>
         </details>
         <div class="cat-breakdown">
           <h3>Novo centro de custo</h3>
           <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="hidden" name="acao" value="criar_grupo">
-            <input name="nome" placeholder="Nome do centro de custo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
-            <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", None)}
-            <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", None)}
+            <input name="nome" placeholder="Nome do centro de custo" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
             <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar</button>
           </form>
         </div>
 
         <div class="cat-breakdown">
           <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
-            Cada centro de custo tem um ou mais subgrupos, e cada subgrupo reúne as categorias vinculadas a ele
-            (coluna "Categorias vinculadas" — clique no × pra desvincular, ou use o seletor pra vincular mais uma).
+            Cada centro de custo (linha em destaque) tem um ou mais subgrupos (recuados, ligados por uma linha),
+            e cada subgrupo reúne as categorias vinculadas a ele — clique no × pra desvincular, ou use o seletor
+            pra vincular mais uma.
           </div>
           <table class="compacta">
             <thead><tr>
-              <th>Subgrupo</th><th>Teto mensal</th><th>Teto anual</th><th>Categorias vinculadas</th><th>Remover</th>
+              <th>Centro de custo / Subgrupo</th><th>Categorias vinculadas</th><th>Remover</th>
             </tr></thead>
             <tbody>{"".join(linhas_html)}</tbody>
           </table>
