@@ -3614,7 +3614,7 @@ def usuarios_view():
                         (login, (request.form.get("novo_nome") or login.capitalize()).strip(),
                          hash_senha(senha), perfil, permissoes_do_perfil(perfil)),
                     )
-                    aviso = f'Usuário "{esc(login)}" criado.' if cur.fetchone() else "Já existe um usuário com esse login."
+                    aviso = f'Usuário "{login}" criado.' if cur.fetchone() else "Já existe um usuário com esse login."
 
             elif acao == "permissoes":
                 perfil = request.form.get("perfil") or "leitura"
@@ -3629,7 +3629,7 @@ def usuarios_view():
                         "UPDATE cartao.usuario SET perfil = %s, permissoes = %s, nome = %s WHERE usuario = %s;",
                         (perfil, marcadas, (request.form.get("nome") or "").strip() or alvo, alvo),
                     )
-                    aviso = f'Permissões de "{esc(alvo)}" atualizadas.'
+                    aviso = f'Permissões de "{alvo}" atualizadas.'
 
             elif acao == "senha":
                 nova = request.form.get("senha") or ""
@@ -3638,7 +3638,7 @@ def usuarios_view():
                 else:
                     cur.execute("UPDATE cartao.usuario SET senha_hash = %s WHERE usuario = %s;",
                                 (hash_senha(nova), alvo))
-                    aviso = f'Senha de "{esc(alvo)}" alterada.'
+                    aviso = f'Senha de "{alvo}" alterada.'
 
             elif acao == "ativar":
                 ativo = request.form.get("ativo") == "1"
@@ -3648,7 +3648,7 @@ def usuarios_view():
                     erro = "É preciso manter ao menos um administrador ativo."
                 else:
                     cur.execute("UPDATE cartao.usuario SET ativo = %s WHERE usuario = %s;", (ativo, alvo))
-                    aviso = f'Acesso de "{esc(alvo)}" ' + ("reativado." if ativo else "desativado.")
+                    aviso = f'Acesso de "{alvo}" ' + ("reativado." if ativo else "desativado.")
 
             elif acao == "excluir":
                 if alvo == session.get("user"):
@@ -3657,7 +3657,7 @@ def usuarios_view():
                     erro = "É preciso manter ao menos um administrador."
                 else:
                     cur.execute("DELETE FROM cartao.usuario WHERE usuario = %s;", (alvo,))
-                    aviso = f'Usuário "{esc(alvo)}" excluído.'
+                    aviso = f'Usuário "{alvo}" excluído.'
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -3671,134 +3671,32 @@ def usuarios_view():
     cur.close()
     conn.close()
 
-    def perfil_options(atual):
-        return "".join(
-            f'<option value="{k}" {"selected" if k == atual else ""}>{v[0]}</option>'
-            for k, v in PERFIS.items()
-        )
-
     def _dt(v):
         return v.strftime("%d/%m/%Y %H:%M") if v else "nunca"
 
-    blocos = []
-    for c in contas:
-        perms = list(c["permissoes"] or [])
-        eu = c["usuario"] == session.get("user")
-        checks = "".join(
-            f'<label class="perm-item" data-tip="{desc}">'
-            f'<input type="checkbox" name="perm" value="{chave}" {"checked" if chave in perms else ""}>'
-            f'<span>{titulo}</span></label>'
-            for chave, (titulo, desc) in PERMISSOES.items()
-        )
-        estado = ('<span class="tag-ativo">ativo</span>' if c["ativo"]
-                  else '<span class="tag-inativo">desativado</span>')
-        blocos.append(f"""
-        <details class="cat-breakdown" style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:10px">
-            <strong style="font-size:14px">{c["nome"] or c["usuario"]}</strong>
-            <span style="color:var(--ink-faint);font-size:12.5px">{c["usuario"]}</span>
-            {estado}
-            <span style="color:var(--ink-faint);font-size:11.5px">{PERFIS.get(c["perfil"], ("Personalizado",))[0]}</span>
-            <span style="margin-left:auto;color:var(--ink-faint);font-size:11.5px">
-              último acesso: {_dt(c["ultimo_acesso"])}</span>
-          </summary>
-          <div style="padding:0 18px 18px 18px">
-            <form method="post">
-              <input type="hidden" name="acao" value="permissoes">
-              <input type="hidden" name="usuario" value="{c["usuario"]}">
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-                <input name="nome" value="{esc(c["nome"]) if c["nome"] else ""}" placeholder="Nome"
-                       style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:190px">
-                <span style="font-size:12px;color:var(--ink-faint)">Perfil</span>
-                <select name="perfil" onchange="aplicarPerfil(this)" data-usuario="{c["usuario"]}"
-                        style="padding:7px 9px">{perfil_options(c["perfil"])}</select>
-                <span style="font-size:11.5px;color:var(--ink-faint)">
-                  escolher um perfil marca as permissões dele; depois você pode ajustar uma a uma
-                </span>
-              </div>
-              <div class="perm-grid" data-usuario="{c["usuario"]}">{checks}</div>
-              <button type="submit" style="margin-top:12px">Salvar permissões</button>
-            </form>
+    eu = session.get("user")
+    usuarios = [{
+        "usuario": c["usuario"],
+        "nome": c["nome"],
+        "perfil": c["perfil"],
+        "perfil_rotulo": PERFIS.get(c["perfil"], ("Personalizado",))[0],
+        "permissoes": list(c["permissoes"] or []),
+        "ativo": c["ativo"],
+        "sou_eu": c["usuario"] == eu,
+        "ultimo_acesso_fmt": _dt(c["ultimo_acesso"]),
+    } for c in contas]
 
-            <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft)">
-              <form method="post" style="display:flex;gap:8px;align-items:center">
-                <input type="hidden" name="acao" value="senha">
-                <input type="hidden" name="usuario" value="{c["usuario"]}">
-                <input name="senha" type="password" placeholder="Nova senha" minlength="6"
-                       style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
-                <button type="submit" class="ver-btn">Trocar senha</button>
-              </form>
-              <form method="post" style="display:flex;align-items:center">
-                <input type="hidden" name="acao" value="ativar">
-                <input type="hidden" name="usuario" value="{c["usuario"]}">
-                <input type="hidden" name="ativo" value="{'0' if c["ativo"] else '1'}">
-                <button type="submit" class="ver-btn" {"disabled" if eu else ""}>
-                  {"Desativar acesso" if c["ativo"] else "Reativar acesso"}</button>
-              </form>
-              <form method="post" onsubmit="return confirm('Excluir o usuário {c["usuario"]}? Esta ação não pode ser desfeita.')">
-                <input type="hidden" name="acao" value="excluir">
-                <input type="hidden" name="usuario" value="{c["usuario"]}">
-                <button type="submit" class="btn-perigo" {"disabled" if eu else ""}>Excluir</button>
-              </form>
-            </div>
-          </div>
-        </details>""")
-
-    msg = ""
-    if aviso:
-        msg = f'<div class="aviso-ok">{aviso}</div>'
-    if erro:
-        msg = f'<div class="aviso-erro">{erro}</div>'
-
-    legenda = "".join(
-        f'<div class="cat-row"><span><strong>{t}</strong></span><span style="color:var(--ink-soft);font-size:12.5px">{d}</span></div>'
-        for t, d in PERMISSOES.values()
+    return render_template(
+        "usuarios.html",
+        titulo="Usuários e permissões",
+        topbar=topbar_html("Usuários e permissões", "usuarios"),
+        aviso=aviso,
+        erro=erro,
+        contas=usuarios,
+        perfis={k: {"rotulo": v[0]} for k, v in PERFIS.items()},
+        perfis_permissoes={k: v[1] for k, v in PERFIS.items()},
+        permissoes={k: {"titulo": t, "descricao": d} for k, (t, d) in PERMISSOES.items()},
     )
-
-    return f"""
-    <html><head><title>Usuários e permissões · {APP_NOME}</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Usuários e permissões', 'usuarios')}
-      <div class="wrap">
-        {msg}
-        <div class="cat-breakdown">
-          <h3>Novo usuário</h3>
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="criar">
-            <input name="novo_usuario" placeholder="Login (ex: joao)" required
-                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
-            <input name="novo_nome" placeholder="Nome"
-                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:180px">
-            <input name="nova_senha" type="password" placeholder="Senha (mín. 6)" minlength="6" required
-                   style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
-            <select name="perfil" style="padding:7px 9px">{perfil_options("operador")}</select>
-            <button type="submit">Criar usuário</button>
-          </form>
-        </div>
-
-        {"".join(blocos)}
-
-        <details class="cat-breakdown" style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:13px;color:var(--ink-soft)">
-            O que cada permissão libera
-          </summary>
-          <div style="padding:0 18px 16px 18px">{legenda}</div>
-        </details>
-      </div>
-
-      <script>
-        const PERFIS = {json.dumps({k: v[1] for k, v in PERFIS.items()})};
-        function aplicarPerfil(sel) {{
-          const perms = PERFIS[sel.value] || [];
-          const grade = document.querySelector('.perm-grid[data-usuario="' + sel.dataset.usuario + '"]');
-          if (!grade) return;
-          grade.querySelectorAll('input[type=checkbox]').forEach(cb => {{
-            cb.checked = perms.includes(cb.value);
-          }});
-        }}
-      </script>
-    </body></html>
-    """
 
 
 @app.route("/health")

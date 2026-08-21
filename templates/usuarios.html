@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% macro sel_perfil(atual) %}
+  <select name="perfil" style="padding:7px 9px">
+    {% for chave, p in perfis.items() %}
+      <option value="{{ chave }}" {{ 'selected' if chave == atual }}>{{ p.rotulo }}</option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
+{% block conteudo %}
+<div class="cat-breakdown">
+  <h3>Novo usuário</h3>
+  <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="criar">
+    <input name="novo_usuario" placeholder="Login (ex: joao)" required
+           style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+    <input name="novo_nome" placeholder="Nome"
+           style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:180px">
+    <input name="nova_senha" type="password" placeholder="Senha (mín. 6)" minlength="6" required
+           style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+    {{ sel_perfil("operador") }}
+    <button type="submit">Criar usuário</button>
+  </form>
+</div>
+
+{% for c in contas %}
+  <details class="cat-breakdown" style="padding:0">
+    <summary style="cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:10px">
+      <strong style="font-size:14px">{{ c.nome or c.usuario }}</strong>
+      <span style="color:var(--ink-faint);font-size:12.5px">{{ c.usuario }}</span>
+      {% if c.ativo %}
+        <span class="tag-ativo">ativo</span>
+      {% else %}
+        <span class="tag-inativo">desativado</span>
+      {% endif %}
+      <span style="color:var(--ink-faint);font-size:11.5px">{{ c.perfil_rotulo }}</span>
+      <span style="margin-left:auto;color:var(--ink-faint);font-size:11.5px">
+        último acesso: {{ c.ultimo_acesso_fmt }}</span>
+    </summary>
+    <div style="padding:0 18px 18px 18px">
+      <form method="post">
+        <input type="hidden" name="acao" value="permissoes">
+        <input type="hidden" name="usuario" value="{{ c.usuario }}">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+          <input name="nome" value="{{ c.nome or '' }}" placeholder="Nome"
+                 style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:190px">
+          <span style="font-size:12px;color:var(--ink-faint)">Perfil</span>
+          <select name="perfil" onchange="aplicarPerfil(this)" data-usuario="{{ c.usuario }}"
+                  style="padding:7px 9px">
+            {% for chave, p in perfis.items() %}
+              <option value="{{ chave }}" {{ 'selected' if chave == c.perfil }}>{{ p.rotulo }}</option>
+            {% endfor %}
+          </select>
+          <span style="font-size:11.5px;color:var(--ink-faint)">
+            escolher um perfil marca as permissões dele; depois você pode ajustar uma a uma
+          </span>
+        </div>
+        <div class="perm-grid" data-usuario="{{ c.usuario }}">
+          {% for chave, p in permissoes.items() %}
+            <label class="perm-item" data-tip="{{ p.descricao }}">
+              <input type="checkbox" name="perm" value="{{ chave }}" {{ 'checked' if chave in c.permissoes }}>
+              <span>{{ p.titulo }}</span>
+            </label>
+          {% endfor %}
+        </div>
+        <button type="submit" style="margin-top:12px">Salvar permissões</button>
+      </form>
+
+      <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--line-soft)">
+        <form method="post" style="display:flex;gap:8px;align-items:center">
+          <input type="hidden" name="acao" value="senha">
+          <input type="hidden" name="usuario" value="{{ c.usuario }}">
+          <input name="senha" type="password" placeholder="Nova senha" minlength="6"
+                 style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:170px">
+          <button type="submit" class="ver-btn">Trocar senha</button>
+        </form>
+        <form method="post" style="display:flex;align-items:center">
+          <input type="hidden" name="acao" value="ativar">
+          <input type="hidden" name="usuario" value="{{ c.usuario }}">
+          <input type="hidden" name="ativo" value="{{ '0' if c.ativo else '1' }}">
+          <button type="submit" class="ver-btn" {{ 'disabled' if c.sou_eu }}>
+            {{ 'Desativar acesso' if c.ativo else 'Reativar acesso' }}</button>
+        </form>
+        {# o login vai para dentro de uma string JS: tojson escapa para esse contexto,
+           o escape de HTML sozinho nao serve aqui #}
+        <form method="post" onsubmit="return confirm('Excluir o usuário ' + {{ c.usuario|tojson }} + '? Esta ação não pode ser desfeita.')">
+          <input type="hidden" name="acao" value="excluir">
+          <input type="hidden" name="usuario" value="{{ c.usuario }}">
+          <button type="submit" class="btn-perigo" {{ 'disabled' if c.sou_eu }}>Excluir</button>
+        </form>
+      </div>
+    </div>
+  </details>
+{% endfor %}
+
+<details class="cat-breakdown" style="padding:0">
+  <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:13px;color:var(--ink-soft)">
+    O que cada permissão libera
+  </summary>
+  <div style="padding:0 18px 16px 18px">
+    {% for p in permissoes.values() %}
+      <div class="cat-row">
+        <span><strong>{{ p.titulo }}</strong></span>
+        <span style="color:var(--ink-soft);font-size:12.5px">{{ p.descricao }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PERFIS = {{ perfis_permissoes|tojson }};
+  function aplicarPerfil(sel) {
+    const perms = PERFIS[sel.value] || [];
+    const grade = document.querySelector('.perm-grid[data-usuario="' + sel.dataset.usuario + '"]');
+    if (!grade) return;
+    grade.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.checked = perms.includes(cb.value);
+    });
+  }
+</script>
+{% endblock %}
