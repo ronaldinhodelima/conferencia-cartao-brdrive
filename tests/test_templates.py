@@ -1,11 +1,10 @@
 """Renderiza os templates com o formato REAL dos dados que a view entrega.
 
-Existe por causa de um bug que passou despercebido: /importar desempacotava 3
-valores de uma tupla que carregar_origens() devolve com 4 desde o commit fcedcf1.
-A tela ficou dando 500 e ninguem viu, porque ela nao esta mais no menu.
-
-Testar com dado inventado nao pega esse tipo de erro - o formato aqui tem que
-espelhar o que a funcao realmente devolve.
+Existe por causa de um bug que passou despercebido: a tela /importar desempacotava
+3 valores de uma tupla que carregar_origens() devolve com 4 desde o commit fcedcf1,
+e ficou dando 500 sem ninguem ver (ela nao estava mais no menu). A tela foi removida
+depois, mas a licao fica: testar com dado inventado nao pega esse tipo de erro - o
+formato usado aqui tem que espelhar o que a view realmente entrega.
 """
 import pytest
 
@@ -16,35 +15,6 @@ import app
 def ctx():
     with app.app.test_request_context("/"):
         yield
-
-
-# (account_id, html com selo, label completo, label curto) - ver carregar_origens()
-ORIGEM_OPCOES = [
-    ("acc-1", '<span class="selo">UN</span>Unicred CC', "Unicred · Conta corrente · Ronaldo", "Unicred CC"),
-    ("acc-2", '<span class="selo">NU</span>Nubank', "Nubank · Cartão de crédito · Andrea", "Nubank"),
-]
-
-
-class TestImportar:
-    def test_renderiza_com_a_tupla_real_de_4_elementos(self, ctx):
-        html = app.render_template(
-            "importar.html", titulo="Importar", topbar="", origem_opcoes=ORIGEM_OPCOES
-        )
-        assert html.count("<option") == 2
-        assert "Unicred · Conta corrente · Ronaldo" in html
-
-    def test_option_usa_texto_puro_e_nao_o_html_do_selo(self, ctx):
-        # o <option> nao renderiza tag; se usar o campo com selo, o usuario ve
-        # a marcacao crua no dropdown
-        html = app.render_template(
-            "importar.html", titulo="Importar", topbar="", origem_opcoes=ORIGEM_OPCOES
-        )
-        assert 'class="selo"' not in html
-
-    def test_sem_origem_nenhuma_nao_quebra(self, ctx):
-        html = app.render_template("importar.html", titulo="Importar", topbar="", origem_opcoes=[])
-        assert "<option" not in html
-        assert "Ver prévia" in html
 
 
 class TestInvestimentos:

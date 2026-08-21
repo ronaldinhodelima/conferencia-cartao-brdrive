@@ -53,7 +53,6 @@ PERMISSOES = {
     "lancamentos_editar": ("Editar lançamentos", "Mudar categoria, responsável, projeto, observação e marcar duplicadas."),
     "lancamentos_conferir": ("Conferir lançamentos", "Marcar um lançamento como conferido."),
     "lancamentos_manual": ("Lançar dinheiro manual", "Criar e excluir lançamentos em espécie."),
-    "importar": ("Importar extrato / fatura", "Subir arquivos OFX e CSV para completar períodos."),
     "relatorios": ("Ver relatórios", "Relatórios, DRE e investimentos."),
     "cadastros": ("Gerenciar cadastros", "Grupos de custo, dimensões, regras automáticas, cartões e naturezas."),
     "sincronizar": ("Sincronizar com o banco", "Usar o botão Atualizar agora."),
@@ -65,7 +64,7 @@ PERFIS = {
     "admin": ("Administrador", list(PERMISSOES.keys())),
     "operador": ("Operador", [
         "lancamentos_ver", "lancamentos_editar", "lancamentos_conferir",
-        "lancamentos_manual", "importar", "relatorios", "sincronizar",
+        "lancamentos_manual", "relatorios", "sincronizar",
     ]),
     "leitura": ("Somente leitura", ["lancamentos_ver", "relatorios"]),
 }
@@ -442,168 +441,16 @@ def carregar_origens(cur):
 IMPORT_NAMESPACE = uuid.UUID("6f1c2a52-0000-4000-8000-000000000042")
 
 
-def _decodificar(raw):
-    for enc in ("utf-8-sig", "utf-8", "latin-1"):
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
 
 
-def _num_br(txt):
-    """Converte '1.234,56', '-1234.56', 'R$ 1.234,56' em float."""
-    if txt is None:
-        return None
-    s = str(txt).strip().replace("R$", "").replace(" ", "").replace("\xa0", "")
-    if not s:
-        return None
-    negativo = s.startswith("(") and s.endswith(")")
-    if negativo:
-        s = s[1:-1]
-    s = s.replace("+", "")
-    if "," in s and "." in s:
-        # 1.234,56 (BR) ou 1,234.56 (US) - o ultimo separador manda
-        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
-    elif "," in s:
-        s = s.replace(",", ".")
-    try:
-        v = float(s)
-    except ValueError:
-        return None
-    return -v if negativo else v
 
 
-def _data_br(txt):
-    """Aceita dd/mm/aaaa, aaaa-mm-dd e o formato OFX (aaaammdd...)."""
-    s = str(txt or "").strip()
-    if not s:
-        return None
-    # OFX: 20260115 ou 20260115120000[-3:BRT]
-    m = re.match(r"^(\d{4})(\d{2})(\d{2})(?:\d{2})?", s)
-    if m and not re.match(r"^\d{4}-\d{2}-\d{2}", s):
-        try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
-        except ValueError:
-            return None
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(s[:10], fmt).date()
-        except ValueError:
-            continue
-    return None
 
 
-def parse_ofx(texto):
-    """Extrai as transacoes de um arquivo OFX (formato SGML dos bancos brasileiros)."""
-    linhas = []
-    for bloco in re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto, re.S | re.I):
-        def tag(nome):
-            m = re.search(rf"<{nome}>([^<\r\n]*)", bloco, re.I)
-            return m.group(1).strip() if m else ""
-        data = _data_br(tag("DTPOSTED"))
-        valor = _num_br(tag("TRNAMT"))
-        desc = tag("MEMO") or tag("NAME")
-        if data is None or valor is None:
-            continue
-        linhas.append({"data": data, "descricao": desc.strip(), "valor": valor, "fitid": tag("FITID")})
-    return linhas
 
 
-def parse_csv(texto):
-    """Extrai transacoes de um CSV, detectando delimitador e as colunas de data/descricao/valor."""
-    # escolhe o delimitador que produz o maior numero de colunas de forma consistente
-    # (o Sniffer erra com valores em formato BR, onde a virgula e decimal)
-    melhor, melhor_score = ";", -1
-    for cand in (";", ",", "\t", "|"):
-        try:
-            linhas = [l for l in csv.reader(io.StringIO(texto), delimiter=cand) if any((c or "").strip() for c in l)]
-        except csv.Error:
-            continue
-        if not linhas:
-            continue
-        contagens = [len(l) for l in linhas[:50]]
-        mais_comum = max(set(contagens), key=contagens.count)
-        if mais_comum < 2:
-            continue
-        consistencia = contagens.count(mais_comum) / len(contagens)
-        score = mais_comum * consistencia
-        if score > melhor_score:
-            melhor, melhor_score = cand, score
-    delim = melhor
-
-    linhas_raw = list(csv.reader(io.StringIO(texto), delimiter=delim))
-    linhas_raw = [l for l in linhas_raw if any((c or "").strip() for c in l)]
-    if not linhas_raw:
-        return [], "Arquivo vazio."
-
-    def norm(s):
-        s = (s or "").strip().lower()
-        for a, b in (("ç", "c"), ("ã", "a"), ("á", "a"), ("â", "a"), ("é", "e"), ("ê", "e"), ("í", "i"), ("ó", "o"), ("õ", "o"), ("ú", "u")):
-            s = s.replace(a, b)
-        return s
-
-    # procura a linha de cabecalho nas primeiras linhas
-    idx_cab, cols = None, {}
-    for i, linha in enumerate(linhas_raw[:15]):
-        n = [norm(c) for c in linha]
-        c = {}
-        for j, cel in enumerate(n):
-            if "data" in cel or cel in ("date", "dt"):
-                c.setdefault("data", j)
-            elif any(k in cel for k in ("descri", "historico", "lancamento", "memo", "estabelecimento", "titulo")):
-                c.setdefault("descricao", j)
-            elif any(k in cel for k in ("valor", "amount", "montante")) and "moeda" not in cel:
-                c.setdefault("valor", j)
-        if "data" in c and "valor" in c:
-            idx_cab, cols = i, c
-            break
-
-    resultado = []
-    if idx_cab is None:
-        # sem cabecalho reconhecido: tenta posicional (data ; descricao ; valor)
-        for linha in linhas_raw:
-            if len(linha) < 3:
-                continue
-            data = _data_br(linha[0])
-            valor = _num_br(linha[-1])
-            if data and valor is not None:
-                resultado.append({"data": data, "descricao": " ".join(linha[1:-1]).strip(), "valor": valor, "fitid": ""})
-        if not resultado:
-            return [], "Não consegui identificar as colunas de data, descrição e valor. Verifique o arquivo."
-        return resultado, None
-
-    for linha in linhas_raw[idx_cab + 1:]:
-        if len(linha) <= max(cols.values()):
-            continue
-        data = _data_br(linha[cols["data"]])
-        valor = _num_br(linha[cols["valor"]])
-        if data is None or valor is None:
-            continue
-        desc = linha[cols["descricao"]].strip() if "descricao" in cols else ""
-        resultado.append({"data": data, "descricao": desc, "valor": valor, "fitid": ""})
-    if not resultado:
-        return [], "Nenhuma linha válida encontrada no arquivo."
-    return resultado, None
 
 
-def normalizar_para_conta(linhas, tipo_conta, inverter):
-    """Ajusta o sinal ao padrao usado no banco de dados.
-
-    - Conta corrente (BANK): entrada positiva, saida negativa (igual ao OFX).
-    - Cartao (CREDIT): compra positiva, pagamento negativo (invertido em relacao ao OFX).
-    """
-    saida = []
-    for l in linhas:
-        v = float(l["valor"])
-        if inverter:
-            v = -v
-        if tipo_conta == "CREDIT":
-            tipo = "DEBIT" if v > 0 else "CREDIT"
-        else:
-            tipo = "CREDIT" if v > 0 else "DEBIT"
-        saida.append({**l, "valor": round(v, 2), "tipo": tipo})
-    return saida
 
 
 def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()"):
@@ -2763,7 +2610,7 @@ def relatorios():
         <div style="font-size:12px;color:#888;margin-bottom:10px">
           Pagamento de fatura, transferência entre contas próprias, aplicações e compra de bens
           <strong>não são despesa</strong> — só trocam a forma do dinheiro. Por isso ficam fora da visão de Despesas
-          (veja a <a href="/naturezas">classificação de naturezas</a>).
+          (veja a <a href="/categorias">classificação de naturezas</a>).
         </div>
         <div class="rel-filtros">
           <select name="visao" id="selVisao" class="chip-btn" style="border-radius:20px" onchange="aplicarFiltros()">
@@ -3203,148 +3050,12 @@ def relatorios_lancamentos():
     return jsonify({"lancamentos": lancamentos, "total": len(lancamentos)})
 
 
-def _ler_arquivo_importacao(arquivo):
-    """Devolve (linhas, erro). Detecta OFX ou CSV pelo conteudo/extensao."""
-    raw = arquivo.read()
-    if not raw:
-        return None, "Arquivo vazio."
-    if len(raw) > 8 * 1024 * 1024:
-        return None, "Arquivo muito grande (limite de 8 MB)."
-    texto = _decodificar(raw)
-    nome = (arquivo.filename or "").lower()
-    if "<STMTTRN>" in texto.upper() or nome.endswith((".ofx", ".qfx")):
-        linhas = parse_ofx(texto)
-        if not linhas:
-            return None, "Não encontrei transações no OFX. O arquivo pode estar em outro formato."
-        return linhas, None
-    return parse_csv(texto)
 
 
-@app.route("/api/importar/preview", methods=["POST"])
-@requer("importar")
-def importar_preview():
-    arquivo = request.files.get("arquivo")
-    account_id = request.form.get("origem")
-    inverter = request.form.get("inverter") == "1"
-    if not arquivo or not account_id:
-        return jsonify({"ok": False, "erro": "Escolha o arquivo e a origem."}), 400
-
-    linhas, erro = _ler_arquivo_importacao(arquivo)
-    if erro:
-        return jsonify({"ok": False, "erro": erro}), 400
-
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT tipo FROM cartao.conta WHERE account_id = %s;", (account_id,))
-    conta = cur.fetchone()
-    if not conta:
-        cur.close()
-        conn.close()
-        return jsonify({"ok": False, "erro": "Origem inválida."}), 400
-
-    linhas = normalizar_para_conta(linhas, conta["tipo"], inverter)
-    datas = [l["data"] for l in linhas]
-
-    # o que ja existe no periodo, para marcar duplicados (mesma data + mesmo valor)
-    cur.execute(
-        "SELECT to_char(data_transacao, 'YYYY-MM-DD') AS d, "
-        "ROUND(COALESCE(valor_brl, valor_original), 2) AS v, descricao "
-        "FROM cartao.transacao WHERE account_id = %s AND data_transacao::date BETWEEN %s AND %s;",
-        (account_id, min(datas), max(datas)),
-    )
-    existentes = {}
-    for r in cur.fetchall():
-        existentes.setdefault((r["d"], float(r["v"])), []).append(r["descricao"] or "")
-    cur.close()
-    conn.close()
-
-    itens = []
-    for l in linhas:
-        chave = (l["data"].isoformat(), float(l["valor"]))
-        ja_tem = existentes.get(chave)
-        itens.append({
-            "data": l["data"].isoformat(),
-            "data_fmt": l["data"].strftime("%d/%m/%Y"),
-            "descricao": l["descricao"] or "(sem descrição)",
-            "valor": l["valor"],
-            "tipo": l["tipo"],
-            "fitid": l.get("fitid") or "",
-            "duplicado": bool(ja_tem),
-            "ja_existe_como": (ja_tem[0][:60] if ja_tem else ""),
-        })
-    itens.sort(key=lambda i: i["data"])
-    novos = sum(1 for i in itens if not i["duplicado"])
-    return jsonify({
-        "ok": True,
-        "itens": itens,
-        "total": len(itens),
-        "novos": novos,
-        "duplicados": len(itens) - novos,
-        "periodo": f'{itens[0]["data_fmt"]} a {itens[-1]["data_fmt"]}' if itens else "-",
-    })
 
 
-@app.route("/api/importar/confirmar", methods=["POST"])
-@requer("importar")
-def importar_confirmar():
-    dados = request.get_json(force=True)
-    account_id = dados.get("origem")
-    itens = dados.get("itens") or []
-    if not account_id or not itens:
-        return jsonify({"ok": False, "erro": "Nada para importar."}), 400
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        inseridos = 0
-        for it in itens:
-            data = _data_br(it.get("data"))
-            valor = float(it.get("valor"))
-            desc = (it.get("descricao") or "").strip()[:300]
-            if not data:
-                continue
-            # id estavel: reimportar o mesmo arquivo nao duplica
-            semente = it.get("fitid") or f'{data.isoformat()}|{valor}|{desc}'
-            tid = str(uuid.uuid5(IMPORT_NAMESPACE, f"{account_id}|{semente}"))
-            cur.execute(
-                "INSERT INTO cartao.transacao ("
-                "transacao_id, account_id, descricao, descricao_bruta, valor_original, moeda_original, "
-                "valor_brl, data_transacao, status, tipo, importado, criado_em, atualizado_em, sincronizado_em"
-                ") VALUES (%s,%s,%s,%s,%s,'BRL',%s,%s,'POSTED',%s, true, now(), now(), now()) "
-                "ON CONFLICT (transacao_id) DO UPDATE SET importado = true "
-                "RETURNING (xmax = 0) AS novo;",
-                (tid, account_id, desc, desc, valor, valor,
-                 f"{data.isoformat()} 12:00:00-03:00", it.get("tipo") or "DEBIT"),
-            )
-            if cur.fetchone()[0]:
-                inseridos += 1
-        conn.commit()
-        # aplica as regras de classificacao automatica nos recem-importados
-        cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        aplicar_regras(cur2)
-        conn.commit()
-        cur2.close()
-        cur.close()
-        conn.close()
-        return jsonify({"ok": True, "inseridos": inseridos, "ignorados": len(itens) - inseridos})
-    except Exception as e:
-        return jsonify({"ok": False, "erro": str(e)}), 400
 
 
-@app.route("/importar")
-@requer("importar")
-def importar_view():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    _, origem_opcoes = carregar_origens(cur)
-    cur.close()
-    conn.close()
-
-    return render_template(
-        "importar.html",
-        titulo="Importar extrato / fatura",
-        topbar=topbar_html("Importar extrato / fatura", "importar"),
-        origem_opcoes=origem_opcoes,
-    )
 
 
 @app.route("/investimentos")
