@@ -253,12 +253,34 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
 
 ## Pendências conhecidas
 
+### Ação do usuário (nada disso o Claude pode fazer sozinho)
+
+- **Rotar o token do Coolify.** O token foi colado no chat durante a sessão de 21/08/2026 e
+  deve ser considerado comprometido. Gerar novo em Coolify → Keys & Tokens e revogar o antigo.
+- **Revisar `/pendencias`.** Há categorias sem natureza definida (Aeroporto, Água/Gás,
+  Automotive, Bicycle, Cinema…). Sem natureza, o app assume `despesa` por padrão — ou seja,
+  elas **entram no resultado do DRE como gasto** sem ninguém ter decidido isso. É o tipo de
+  coisa que infla despesa, contra a regra de ouro do projeto.
+
+### Técnicas
+
 **Escape em JS montado no cliente:** três telas montam HTML no navegador com `innerHTML`
 a partir de dados que chegam por AJAX (`lancamentos.js`, `relatorios.js`, `categorias.js`).
 Aí o Jinja não protege — quem escapa é o `escHtml()` do `tabelas.js`, no ponto onde o
 `innerHTML` é montado. A regra combinada: **o servidor manda texto puro** (`cat_pt_puro`,
 sem `esc()`) **e o JS escapa**. Não escapar no servidor também: gera escape duplo, e em
 rótulo de gráfico (Chart.js desenha em canvas) apareceria `&amp;` literal na tela.
+
+**Servidor de desenvolvimento em produção:** o `Dockerfile` sobe com `python app.py`, ou
+seja, o servidor embutido do Flask — ele mesmo avisa no log ("This is a development server").
+Aguenta o uso da família, mas atende uma requisição por vez e não foi feito para exposição
+pública. Trocar por `gunicorn` é uma linha no `Dockerfile` (`CMD ["gunicorn","-b","0.0.0.0:8000","app:app"]`)
+mais `gunicorn` no `pip install`. **Não foi feito** para não misturar mudança de runtime com a
+refatoração; é a próxima coisa que eu faria.
+
+**Chart.js vem de CDN** (`cdnjs.cloudflare.com`, em `templates/relatorios.html`). É a única
+dependência externa em runtime: se o CDN cair ou for bloqueado, o gráfico de `/relatorios`
+some (o resto da tela continua). Baixar o arquivo para `static/` resolveria.
 
 **Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
 Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.
