@@ -1179,7 +1179,8 @@ BASE_CSS = BASE_CSS_HEAD + """
   .status.show { opacity: 1; }
 
   /* ---------- tabela compacta de lancamentos ---------- */
-  table.compacta { table-layout: fixed; font-size: 12.5px; }
+  .tabela-scroll { overflow-x: auto; max-width: 100%; }
+  table.compacta { table-layout: fixed; font-size: 12.5px; width: max-content; min-width: 100%; }
   table.compacta th { padding: 8px 8px; font-size: 10px; }
   table.compacta td { padding: 5px 8px; font-size: 12.5px; }
   table.compacta .cel-data { width: 78px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.25; }
@@ -1928,12 +1929,14 @@ def index():
           <div class="det-body">{cat_rows_html}</div>
         </details>
 
+        <div class="tabela-scroll">
         <table class="compacta">
           <thead><tr>
             <th class="cel-data">Data</th><th class="cel-desc">Descricao</th><th class="cel-origem">Origem</th><th class="cel-dim">Categoria</th>{dim_headers}<th class="cel-valor" style="text-align:right">Valor</th><th class="cel-obs">Obs</th><th class="cel-check">Conf</th><th class="cel-status"></th>
           </tr></thead>
           <tbody>{body_rows}</tbody>
         </table>
+        </div>
       </div>
 
       <div class="modal-bg" id="modalBg" onclick="if(event.target===this) fecharModal()">
@@ -3079,6 +3082,7 @@ def dre():
             não empobrecem, apenas mudam a forma do patrimônio. Por isso ficam de fora do resultado e
             aparecem na última coluna. Já os juros e tarifas <strong>são despesa</strong>, porque o dinheiro sai e não volta.
           </div>
+          <div class="tabela-scroll">
           <table class="compacta">
             <thead><tr>
               <th>Mês</th>
@@ -3090,6 +3094,7 @@ def dre():
             </tr></thead>
             <tbody>{corpo_dre}</tbody>
           </table>
+          </div>
         </div>
 
         <div style="font-size:13px;color:var(--ink-soft);margin:22px 0 10px 0">
@@ -3328,12 +3333,14 @@ def grupos_view():
             e cada subgrupo reúne as categorias vinculadas a ele — clique no × pra desvincular, ou use o seletor
             pra vincular mais uma.
           </div>
+          <div class="tabela-scroll">
           <table class="compacta">
             <thead><tr>
               <th>Centro de custo / Subgrupo</th><th>Categorias vinculadas</th><th>Remover</th>
             </tr></thead>
             <tbody>{"".join(linhas_html)}</tbody>
           </table>
+          </div>
         </div>
 
         <div class="cat-breakdown">
@@ -4129,6 +4136,7 @@ def importar_view():
               <button type="button" class="ver-btn" onclick="marcarSomenteNovos()">Só os novos</button>
               <button type="button" id="btnImportar" onclick="confirmarImport()" style="margin-left:auto">Importar selecionados</button>
             </div>
+            <div class="tabela-scroll">
             <table class="compacta">
               <thead><tr>
                 <th class="cel-check">Imp</th><th class="cel-data">Data</th><th class="cel-desc">Descrição</th>
@@ -4136,6 +4144,7 @@ def importar_view():
               </tr></thead>
               <tbody id="corpoPreview"></tbody>
             </table>
+            </div>
           </div>
         </div>
       </div>
@@ -4330,11 +4339,13 @@ def investimentos_view():
         bloco_hist = f"""
         <div class="cat-breakdown">
           <h3>Evolução do saldo</h3>
+          <div class="tabela-scroll">
           <table class="compacta">
             <thead><tr><th>Mês</th><th style="text-align:right">Aplicado</th>
             <th style="text-align:right">Saldo</th><th style="text-align:right">Variação</th></tr></thead>
             <tbody>{"".join(linhas_hist)}</tbody>
           </table>
+          </div>
         </div>"""
     else:
         bloco_hist = """
@@ -4366,6 +4377,7 @@ def investimentos_view():
             O <strong>saldo é patrimônio</strong>, não entra no DRE — aplicar e resgatar só muda a forma do dinheiro.
             O que entra no resultado é o <strong>rendimento</strong> (receita financeira) e o <strong>IR</strong> (despesa financeira).
           </div>
+          <div class="tabela-scroll">
           <table class="compacta">
             <thead><tr>
               <th>Aplicação</th>
@@ -4378,6 +4390,7 @@ def investimentos_view():
             </tr></thead>
             <tbody>{corpo}</tbody>
           </table>
+          </div>
         </div>
 
         {bloco_hist}
@@ -4711,6 +4724,7 @@ def categorias_view():
             Uma categoria só pode ser removida quando não tiver nenhum lançamento — mova os lançamentos para outra
             categoria primeiro, usando a coluna "Mover".
           </div>
+          <div class="tabela-scroll">
           <table class="compacta">
             <thead><tr>
               <th>Categoria</th><th style="text-align:right">Lanç.</th>
@@ -4718,6 +4732,7 @@ def categorias_view():
             </tr></thead>
             <tbody>{"".join(linha(c) for c in todas)}</tbody>
           </table>
+          </div>
         </div>
       </div>
 
