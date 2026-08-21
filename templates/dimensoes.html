@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block conteudo %}
+
+<div style="font-size:13px;color:#666;margin-bottom:16px">
+  Dimensões são classificações independentes do Centro de Custo, aplicadas a cada lançamento
+  (ex: <strong>Responsável</strong> — quem gastou, <strong>Projeto/Evento</strong> — a qual viagem
+  ou evento pertence). Dimensões marcadas como obrigatórias impedem confirmar (marcar como
+  conferida) um lançamento sem esse vínculo preenchido.
+  Cada valor pode ter um <strong>teto de gasto</strong> mensal e/ou anual (ex: "Ronaldo:
+  R$3.000/mês") — o progresso do mês/ano corrente aparece embaixo do valor assim que houver
+  um teto e algum gasto vinculado.
+</div>
+
+<div class="cat-breakdown">
+  <h3>Nova dimensão</h3>
+  <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="acao" value="criar_dimensao">
+    <input name="nome" placeholder="Ex: Cliente, Método de pagamento..."
+           style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+    <label style="font-size:13px;color:#555">
+      <input type="checkbox" name="obrigatoria" checked> obrigatório para confirmar
+    </label>
+    <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">
+      Criar dimensão
+    </button>
+  </form>
+  {% if erro %}<p class="err">{{ erro }}</p>{% endif %}
+</div>
+
+{% for d in dimensoes %}
+<details class="cat-breakdown" open style="padding:0">
+  <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
+    {{ d.nome }}
+    {% if d.obrigatoria %}
+      <span style="color:#c0392b;font-size:12px">(obrigatório)</span>
+    {% else %}
+      <span style="color:#888;font-size:12px">(opcional)</span>
+    {% endif %}
+  </summary>
+  <div style="padding:0 18px 18px 18px">
+    <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <input type="hidden" name="acao" value="editar_dimensao">
+      <input type="hidden" name="dimensao_id" value="{{ d.id }}">
+      <input name="nome" value="{{ d.nome }}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+      <label style="font-size:13px;color:#555">
+        <input type="checkbox" name="obrigatoria" {% if d.obrigatoria %}checked{% endif %}> obrigatório para confirmar
+      </label>
+      <button type="submit" class="ver-btn">Salvar</button>
+    </form>
+    <form method="post" style="display:inline" onsubmit="return confirm('Excluir esta dimensão e todos os seus valores?')">
+      <input type="hidden" name="acao" value="excluir_dimensao">
+      <input type="hidden" name="dimensao_id" value="{{ d.id }}">
+      <button type="submit" class="ver-btn">Excluir dimensão</button>
+    </form>
+
+    <table style="margin-top:12px"><tbody>
+      {% for v in valores_por_dim.get(d.id, []) %}
+      <tr>
+        <td style="padding-left:24px">
+          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="hidden" name="acao" value="editar_valor">
+            <input type="hidden" name="valor_id" value="{{ v.id }}">
+            <input name="nome" value="{{ v.nome }}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
+            <span style="font-size:12px;color:#888">teto mensal</span>
+            <input name="teto_mensal" value="{{ v.teto_mensal|num }}" placeholder="opcional"
+                   style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">
+            <span style="font-size:12px;color:#888">teto anual</span>
+            <input name="teto_anual" value="{{ v.teto_anual|num }}" placeholder="opcional"
+                   style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">
+            <button type="submit" class="ver-btn">Salvar</button>
+          </form>
+          {% set g = gastos.get(v.id, {}) %}
+          {% if v.teto_mensal %}
+            <div style="font-size:11.5px;color:var(--ink-faint)">
+              {{ g.mes|moeda }} este mês de {{ v.teto_mensal|moeda }}
+            </div>
+            {{ barra(g.mes, v.teto_mensal)|safe }}
+          {% elif g.mes %}
+            <div style="font-size:11.5px;color:var(--ink-faint)">{{ g.mes|moeda }} este mês</div>
+          {% endif %}
+          {% if v.teto_anual %}
+            <div style="font-size:11.5px;color:var(--ink-faint);margin-top:4px">
+              {{ g.ano|moeda }} este ano de {{ v.teto_anual|moeda }}
+            </div>
+            {{ barra(g.ano, v.teto_anual)|safe }}
+          {% endif %}
+        </td>
+        <td style="vertical-align:top">
+          <form method="post" onsubmit="return confirm('Excluir este valor?')">
+            <input type="hidden" name="acao" value="excluir_valor">
+            <input type="hidden" name="valor_id" value="{{ v.id }}">
+            <button type="submit" class="ver-btn">Excluir</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="2" style="padding-left:24px;color:#888;font-size:13px">Nenhum valor cadastrado ainda.</td></tr>
+      {% endfor %}
+    </tbody></table>
+
+    <form method="post" style="display:flex;gap:8px;align-items:center;margin-top:8px;padding-left:24px">
+      <input type="hidden" name="acao" value="criar_valor">
+      <input type="hidden" name="dimensao_id" value="{{ d.id }}">
+      <input name="nome" placeholder="Novo valor (ex: Amanda, Viagem Chile 2027)"
+             style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:260px">
+      <button type="submit" class="ver-btn">+ Adicionar valor</button>
+    </form>
+  </div>
+</details>
+{% endfor %}
+
+{% endblock %}

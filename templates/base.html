@@ -19,12 +19,16 @@
   <script src="/static/tabelas.js"></script>
 </head>
 <body>
-  {{ topbar|safe }}{# HTML gerado por topbar_html(), sem entrada de usuario nao escapada #}
-  <div class="wrap">
-    {% if aviso %}<div class="aviso-ok">{{ aviso }}</div>{% endif %}
-    {% if erro %}<div class="aviso-erro">{{ erro }}</div>{% endif %}
-    {% block conteudo %}{% endblock %}
-  </div>
+  {# Layout padrao: topbar + conteudo dentro de .wrap. Telas que precisam de outra
+     estrutura (ex: login, que nao tem topbar) sobrescrevem o bloco `corpo`. #}
+  {% block corpo %}
+    {{ topbar|safe }}{# HTML gerado por topbar_html(), sem entrada de usuario nao escapada #}
+    <div class="wrap">
+      {% if aviso %}<div class="aviso-ok">{{ aviso }}</div>{% endif %}
+      {% if erro %}<div class="aviso-erro">{{ erro }}</div>{% endif %}
+      {% block conteudo %}{% endblock %}
+    </div>
+  {% endblock %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

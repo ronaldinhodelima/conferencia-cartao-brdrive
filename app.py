@@ -1201,37 +1201,7 @@ def login():
 
         error = "Usuário ou senha inválidos." if not (conta and not conta["ativo"]) \
             else "Este acesso está desativado. Fale com um administrador."
-    err_html = '<p class="err">' + error + '</p>' if error else ''
-    return f"""
-    <html><head><title>Entrar · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      <div class="login-box">
-        <div style="text-align:center;margin-bottom:6px">
-          <img src="/static/logo-hero.png" alt="Pé de Meia" style="width:150px;height:auto;display:inline-block">
-        </div>
-        <h2 style="text-align:center">Pé de Meia</h2>
-        <form method="post" autocomplete="on">
-          <input name="usuario" placeholder="Usuario" autocomplete="username" autofocus>
-          <div style="position:relative">
-            <input id="campo-senha" name="senha" type="password" placeholder="Senha"
-                   autocomplete="current-password" style="width:100%;padding-right:36px;box-sizing:border-box">
-            <button type="button" onclick="mostrarSenha()"
-                    style="position:absolute;right:6px;top:50%;transform:translateY(-50%);
-                           background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px;color:var(--ink-faint)"
-                    aria-label="Mostrar senha" title="Mostrar senha">👁</button>
-          </div>
-          <button type="submit">Entrar</button>
-        </form>
-        {err_html}
-      </div>
-      <script>
-        function mostrarSenha() {{
-          const campo = document.getElementById('campo-senha');
-          campo.type = campo.type === 'password' ? 'text' : 'password';
-        }}
-      </script>
-    </body></html>
-    """
+    return render_template("login.html", titulo="Entrar", erro=error)
 
 
 @app.route("/logout")
@@ -2111,107 +2081,21 @@ def dimensoes_view():
     for v in valores_db:
         valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
 
-    def linha_valor(v):
-        gasto = gasto_por_valor.get(v["id"], {})
-        gasto_mes = float(gasto.get("gasto_mes") or 0)
-        gasto_ano = float(gasto.get("gasto_ano") or 0)
-        teto_mensal = float(v["teto_mensal"]) if v["teto_mensal"] is not None else None
-        teto_anual = float(v["teto_anual"]) if v["teto_anual"] is not None else None
-        barra_mensal = _barra_html(gasto_mes, teto_mensal)
-        barra_anual = _barra_html(gasto_ano, teto_anual)
-        progresso = (
-            f'<div style="font-size:11.5px;color:var(--ink-faint)">'
-            f'{_fmt_moeda(gasto_mes)} este mês{" de " + _fmt_moeda(teto_mensal) if teto_mensal else ""}</div>{barra_mensal}'
-            if teto_mensal else
-            (f'<div style="font-size:11.5px;color:var(--ink-faint)">{_fmt_moeda(gasto_mes)} este mês</div>' if gasto_mes else "")
-        )
-        progresso_ano = (
-            f'<div style="font-size:11.5px;color:var(--ink-faint);margin-top:4px">'
-            f'{_fmt_moeda(gasto_ano)} este ano de {_fmt_moeda(teto_anual)}</div>{barra_anual}'
-            if teto_anual else ""
-        )
-        return (
-            f'<tr><td style="padding-left:24px">'
-            f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-            f'<input type="hidden" name="acao" value="editar_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
-            f'<input name="nome" value="{esc(v["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
-            f'<span style="font-size:12px;color:#888">teto mensal</span>'
-            f'<input name="teto_mensal" value="{"" if teto_mensal is None else f"{teto_mensal:g}"}" placeholder="opcional" '
-            f'style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
-            f'<span style="font-size:12px;color:#888">teto anual</span>'
-            f'<input name="teto_anual" value="{"" if teto_anual is None else f"{teto_anual:g}"}" placeholder="opcional" '
-            f'style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:6px">'
-            f'<button type="submit" class="ver-btn">Salvar</button>'
-            f'</form>{progresso}{progresso_ano}'
-            f'</td>'
-            f'<td style="vertical-align:top"><form method="post" onsubmit="return confirm(\'Excluir este valor?\')">'
-            f'<input type="hidden" name="acao" value="excluir_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
-            f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
-        )
+    # gasto ja somado por valor de dimensao, pro template so exibir
+    gastos = {
+        vid: {"mes": float(g["gasto_mes"] or 0), "ano": float(g["gasto_ano"] or 0)}
+        for vid, g in gasto_por_valor.items()
+    }
 
-    blocos = []
-    for d in dims:
-        valores = valores_por_dim.get(d["id"], [])
-        valores_rows = "".join(
-            linha_valor(v)
-            for v in valores
-        ) or '<tr><td colspan="2" style="padding-left:24px;color:#888;font-size:13px">Nenhum valor cadastrado ainda.</td></tr>'
-
-        obrig_checked = "checked" if d["obrigatoria"] else ""
-        blocos.append(f"""
-        <details class="cat-breakdown" open style="padding:0">
-          <summary style="cursor:pointer;padding:14px 18px;font-weight:600;font-size:14px">
-            {d["nome"]} {"<span style='color:#c0392b;font-size:12px'>(obrigatorio)</span>" if d["obrigatoria"] else "<span style='color:#888;font-size:12px'>(opcional)</span>"}
-          </summary>
-          <div style="padding:0 18px 18px 18px">
-            <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-              <input type="hidden" name="acao" value="editar_dimensao"><input type="hidden" name="dimensao_id" value="{d["id"]}">
-              <input name="nome" value="{esc(d["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
-              <label style="font-size:13px;color:#555"><input type="checkbox" name="obrigatoria" {obrig_checked}> obrigatorio para confirmar</label>
-              <button type="submit" class="ver-btn">Salvar</button>
-            </form>
-            <form method="post" style="display:inline" onsubmit="return confirm('Excluir esta dimensao e todos os seus valores?')">
-              <input type="hidden" name="acao" value="excluir_dimensao"><input type="hidden" name="dimensao_id" value="{d["id"]}">
-              <button type="submit" class="ver-btn">Excluir dimensao</button>
-            </form>
-            <table style="margin-top:12px"><tbody>{valores_rows}</tbody></table>
-            <form method="post" style="display:flex;gap:8px;align-items:center;margin-top:8px;padding-left:24px">
-              <input type="hidden" name="acao" value="criar_valor"><input type="hidden" name="dimensao_id" value="{d["id"]}">
-              <input name="nome" placeholder="Novo valor (ex: Amanda, Viagem Chile 2027)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:260px">
-              <button type="submit" class="ver-btn">+ Adicionar valor</button>
-            </form>
-          </div>
-        </details>
-        """)
-
-    erro_html = f'<p class="err">{erro}</p>' if erro else ''
-
-    return f"""
-    <html><head><title>Gerenciar Dimensoes · Pé de Meia</title>{BASE_CSS}</head>
-    <body>
-      {topbar_html('Gerenciar Dimensões', 'dimensoes')}
-      <div class="wrap">
-        <div style="font-size:13px;color:#666;margin-bottom:16px">
-          Dimensoes sao classificacoes independentes do Centro de Custo, aplicadas a cada lancamento
-          (ex: <strong>Responsavel</strong> - quem gastou, <strong>Projeto/Evento</strong> - a qual viagem ou evento pertence).
-          Dimensoes marcadas como obrigatorias impedem confirmar (marcar como conferida) um lancamento sem esse vinculo preenchido.
-          Cada valor pode ter um <strong>teto de gasto</strong> mensal e/ou anual (ex: "Ronaldo: R$3.000/mes") -
-          o progresso do mes/ano corrente aparece embaixo do valor assim que houver um teto e algum gasto vinculado.
-        </div>
-        <div class="cat-breakdown">
-          <h3>Nova dimensao</h3>
-          <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <input type="hidden" name="acao" value="criar_dimensao">
-            <input name="nome" placeholder="Ex: Cliente, Metodo de pagamento..." style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
-            <label style="font-size:13px;color:#555"><input type="checkbox" name="obrigatoria" checked> obrigatorio para confirmar</label>
-            <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Criar dimensao</button>
-          </form>
-          {erro_html}
-        </div>
-        {"".join(blocos)}
-      </div>
-    </body></html>
-    """
+    return render_template(
+        "dimensoes.html",
+        titulo="Gerenciar Dimensões",
+        topbar=topbar_html("Gerenciar Dimensões", "dimensoes"),
+        erro=erro,
+        dimensoes=dims,
+        valores_por_dim=valores_por_dim,
+        gastos=gastos,
+    )
 
 
 @app.route("/regras", methods=["GET", "POST"])
@@ -2433,6 +2317,28 @@ def _barra_html(realizado, teto):
         f'<div style="background:{cor};width:{largura:.0f}%;height:100%"></div></div>'
         f'<div style="font-size:11px;color:{cor};margin-top:2px">{pct:.0f}% do teto</div>'
     )
+
+
+# ---- filtros disponiveis nos templates Jinja ----
+# Existem para o template nao precisar de logica: {{ valor|moeda }} em vez de
+# montar a string no Python e passar HTML pronto (que perderia o escaping).
+@app.template_filter("moeda")
+def _filtro_moeda(v):
+    return _fmt_moeda(float(v or 0))
+
+
+@app.template_filter("num")
+def _filtro_num(v):
+    """Numero sem casas decimais desnecessarias; vazio quando nao ha valor.
+    Usado em campo de formulario, onde None tem que virar string vazia."""
+    if v is None or v == "":
+        return ""
+    return f"{float(v):g}"
+
+
+@app.context_processor
+def _globais_template():
+    return {"barra": _barra_html}
 
 
 @app.route("/dre")
