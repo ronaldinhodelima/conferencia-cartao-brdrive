@@ -2,6 +2,7 @@ import os
 import csv
 import functools
 import hashlib
+import html
 import io
 import json
 import re
@@ -388,8 +389,8 @@ def origem_label(tipo, connector_name, nome_conta, titular=None):
     elif tipo == "MANUAL":
         base = "Dinheiro (manual)"
     else:
-        base = nome_conta or "Outra origem"
-    return f"{base} · {titular}" if titular else base
+        base = esc(nome_conta) or "Outra origem"
+    return f"{base} · {esc(titular)}" if titular else base
 
 
 def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
@@ -402,8 +403,8 @@ def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
     elif tipo == "MANUAL":
         base = "Dinheiro"
     else:
-        base = nome_conta or "Outra"
-    return f"{base} ({titular})" if titular else base
+        base = esc(nome_conta) or "Outra"
+    return f"{base} ({esc(titular)})" if titular else base
 
 
 def carregar_origens(cur):
@@ -664,12 +665,28 @@ def proxima_ocorrencia_dia(dia):
     return candidata
 
 
+def esc(valor):
+    """Escapa texto que veio de input do usuario antes de embutir no HTML (evita XSS).
+    Uso: em qualquer f-string de HTML que interpola nome de categoria, dimensao, grupo,
+    observacao etc - qualquer campo de texto livre editavel pela tela."""
+    if valor is None:
+        return ""
+    return html.escape(str(valor), quote=True)
+
+
+def json_script(obj):
+    """json.dumps seguro para embutir dentro de <script>...</script>. json.dumps sozinho
+    NAO escapa "</" - uma descricao de lancamento contendo literalmente "</script>" fecharia
+    a tag e executaria HTML/JS arbitrario para qualquer um que abrisse a tela."""
+    return json.dumps(obj).replace("</", "<\\/")
+
+
 def cat_pt(categoria):
     if not categoria:
         return "-"
     if categoria in CATEGORIA_PT_DB:
-        return CATEGORIA_PT_DB[categoria]
-    return CATEGORIA_PT.get(categoria, categoria)
+        return esc(CATEGORIA_PT_DB[categoria])
+    return esc(CATEGORIA_PT.get(categoria, categoria))
 
 
 def chave_alfa(texto):
@@ -1681,7 +1698,7 @@ def index():
     conta_row = cur.fetchone()
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
-    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+    nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
 
     cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
     dimensoes = cur.fetchall()
@@ -1736,7 +1753,7 @@ def index():
 
     def cat_options(selected):
         return "".join(
-            f'<option value="{c}" {"selected" if c == selected else ""}>{cat_pt(c)}</option>'
+            f'<option value="{esc(c)}" {"selected" if c == selected else ""}>{cat_pt(c)}</option>'
             for c in categorias
         )
 
@@ -1744,7 +1761,7 @@ def index():
         opts = ['<option value="">(nao definido)</option>']
         for v in valores_por_dim.get(dimensao_id, []):
             sel = "selected" if selecionado == v["id"] else ""
-            opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
+            opts.append(f'<option value="{v["id"]}" {sel}>{esc(v["nome"])}</option>')
         return "".join(opts)
 
     # a tela nao deve oferecer acao que a API vai recusar
@@ -1763,9 +1780,10 @@ def index():
         data_local = r["data_transacao"] - timedelta(hours=3)
         data_fmt = data_local.strftime("%d/%m/%y<br>%H:%M")
         data_fmt_full = data_local.strftime("%d/%m/%Y %H:%M")
-        obs = (r["observacao"] or "").replace('"', "&quot;")
+        obs = esc(r["observacao"])
         rid = r["transacao_id"]
         desc = r["descricao"] or ""
+        desc_esc = esc(desc)
 
         conta_info = contas_by_id.get(str(r["account_id"]))
         # manual (dinheiro) ou importado de arquivo: pode ser excluido pelo modal
@@ -1796,7 +1814,7 @@ def index():
         trs.append(
             f'<tr class="{classes}" data-id="{rid}" onclick="linhaClick(event, \'{rid}\')">'
             f'<td class="cel-data" data-tip="{data_fmt_full}">{data_fmt}</td>'
-            f'<td class="cel-desc" data-tip="{desc}">{desc}</td>'
+            f'<td class="cel-desc" data-tip="{desc_esc}">{desc_esc}</td>'
             f'<td class="cel-origem" data-tip="{origem_completa(r["account_id"], r["numero_cartao_final"])}">{origem_curta(r["account_id"], r["numero_cartao_final"])}</td>'
             f'<td class="cel-dim"><select class="cat-select"{dis_editar} onchange="salvar(\'{rid}\', this)">{cat_options(r["categoria"])}</select></td>'
             + "".join(dim_tds) +
@@ -1835,7 +1853,7 @@ def index():
     cor_resultado = "#1f8a53" if resultado_mes >= 0 else "#c23c34"
     colspan_total = 8 + len(dimensoes)
     body_rows = "".join(trs) if trs else f'<tr><td colspan="{colspan_total}" style="padding:20px;text-align:center;color:#888">Nenhum lançamento neste filtro.</td></tr>'
-    dim_headers = "".join(f'<th class="cel-dim">{d["nome"]}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
+    dim_headers = "".join(f'<th class="cel-dim">{esc(d["nome"])}{" *" if d["obrigatoria"] else ""}</th>' for d in dimensoes)
 
     cat_rows_html = "".join(
         f'<div class="cat-row"><span>{cat_pt(c["categoria"])}</span><span>R$ {c["total"]:,.2f}</span></div>'
@@ -1843,7 +1861,7 @@ def index():
     ) or '<div class="cat-row"><span>Sem dados</span></div>'
 
     origem_filtro_html = chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()")
-    categoria_options_manual = "".join(f'<option value="{c}">{cat_pt(c)}</option>' for c in categorias)
+    categoria_options_manual = "".join(f'<option value="{esc(c)}">{cat_pt(c)}</option>' for c in categorias)
     natureza_options = "".join(
         f'<option value="{k}">{v}</option>' for k, v in NATUREZAS.items() if k != "fluxo"
     )
@@ -2059,8 +2077,15 @@ def index():
             }});
         }}
 
-        window.detalhes = {json.dumps(detalhes_js)};
+        window.detalhes = {json_script(detalhes_js)};
         let idAtualModal = null;
+        function escHtml(s) {{
+          // escapa antes de jogar em innerHTML - descricao/observacao sao texto livre
+          // digitado pelo usuario (lancamento manual, importacao) e nao podem virar HTML/JS
+          return String(s ?? '').replace(/[&<>"']/g, c => ({{
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+          }})[c]);
+        }}
         function verDetalhes(id) {{
           const d = window.detalhes[id];
           if (!d) return;
@@ -2072,11 +2097,11 @@ def index():
           }};
           let html = '';
           for (const k in labels) {{
-            html += '<div class="row"><span>' + labels[k] + '</span><span>' + d[k] + '</span></div>';
+            html += '<div class="row"><span>' + labels[k] + '</span><span>' + escHtml(d[k]) + '</span></div>';
           }}
           for (const k in d) {{
             if (!(k in labels) && k.charAt(0) !== '_') {{
-              html += '<div class="row"><span>' + k + '</span><span>' + d[k] + '</span></div>';
+              html += '<div class="row"><span>' + escHtml(k) + '</span><span>' + escHtml(d[k]) + '</span></div>';
             }}
           }}
           document.getElementById('modalBody').innerHTML = html;
@@ -2204,7 +2229,7 @@ def index():
         }}
         atualizarChipLabels();
       </script>
-      <script type="application/json" data-detalhes>{json.dumps(detalhes_js)}</script>
+      <script type="application/json" data-detalhes>{json_script(detalhes_js)}</script>
     </body></html>
     """
 
@@ -2394,11 +2419,11 @@ def cartoes():
     titulo_form = "Editar cartao" if editando else "Novo cartao"
 
     linhas = "".join(
-        f'<tr><td>{c["prefixo"]}</td><td>final {c["final4"]}</td>'
+        f'<tr><td>{esc(c["prefixo"])}</td><td>final {esc(c["final4"])}</td>'
         f'<td style="white-space:nowrap">'
         f'<a href="/cartoes?editar={c["final4"]}" class="ver-btn" style="text-decoration:none;margin-right:6px">Editar</a>'
         f'<form method="post" style="display:inline" onsubmit="return confirm(\'Excluir este cartao?\')">'
-        f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="final4" value="{c["final4"]}">'
+        f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="final4" value="{esc(c["final4"])}">'
         f'<button type="submit" class="ver-btn">Excluir</button></form></td></tr>'
         for c in cartoes_cadastrados
     ) or '<tr><td colspan="3" style="text-align:center;color:#888;padding:16px">Nenhum cartao cadastrado.</td></tr>'
@@ -2415,14 +2440,14 @@ def cartoes():
           <h3>{titulo_form}{cancelar_html}</h3>
           <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
             <input type="hidden" name="acao" value="salvar">
-            <input type="hidden" name="final4_original" value="{form_final4}">
+            <input type="hidden" name="final4_original" value="{esc(form_final4)}">
             <div>
               <label style="font-size:13px;color:#555;display:block">Ultimos 4 digitos</label>
-              <input name="final4" maxlength="4" placeholder="Ex: 9938" value="{form_final4}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
+              <input name="final4" maxlength="4" placeholder="Ex: 9938" value="{esc(form_final4)}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px">
             </div>
             <div>
               <label style="font-size:13px;color:#555;display:block">Nome / prefixo (ex: Andrea - digital)</label>
-              <input name="prefixo" placeholder="Ex: Andrea - digital" value="{form_prefixo}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
+              <input name="prefixo" placeholder="Ex: Andrea - digital" value="{esc(form_prefixo)}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:260px">
             </div>
             <button type="submit" style="background:#1d2b3a;color:#fff;border:none;padding:9px 16px;border-radius:6px;cursor:pointer">Salvar</button>
           </form>
@@ -2510,7 +2535,7 @@ def dimensoes_view():
             f'<tr><td style="padding-left:24px">'
             f'<form method="post" style="display:flex;gap:8px;align-items:center">'
             f'<input type="hidden" name="acao" value="editar_valor"><input type="hidden" name="valor_id" value="{v["id"]}">'
-            f'<input name="nome" value="{v["nome"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">'
+            f'<input name="nome" value="{esc(v["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">'
             f'<button type="submit" class="ver-btn">Salvar</button>'
             f'</form></td>'
             f'<td><form method="post" onsubmit="return confirm(\'Excluir este valor?\')">'
@@ -2528,7 +2553,7 @@ def dimensoes_view():
           <div style="padding:0 18px 18px 18px">
             <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
               <input type="hidden" name="acao" value="editar_dimensao"><input type="hidden" name="dimensao_id" value="{d["id"]}">
-              <input name="nome" value="{d["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
+              <input name="nome" value="{esc(d["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
               <label style="font-size:13px;color:#555"><input type="checkbox" name="obrigatoria" {obrig_checked}> obrigatorio para confirmar</label>
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
@@ -2670,7 +2695,7 @@ def regras_view():
 
     def cat_options_regra(selecionado=None):
         return "".join(
-            f'<option value="{c}" {"selected" if c == selecionado else ""}>{cat_pt(c)}</option>'
+            f'<option value="{esc(c)}" {"selected" if c == selecionado else ""}>{cat_pt(c)}</option>'
             for c in todas_categorias
         )
 
@@ -2678,7 +2703,7 @@ def regras_view():
         opts = ['<option value="">(nao definir)</option>']
         for v in valores_por_dim.get(dimensao_id, []):
             sel = "selected" if selecionado == v["id"] else ""
-            opts.append(f'<option value="{v["id"]}" {sel}>{v["nome"]}</option>')
+            opts.append(f'<option value="{v["id"]}" {sel}>{esc(v["nome"])}</option>')
         return "".join(opts)
 
     dim_cols_novo = "".join(
@@ -2715,7 +2740,7 @@ def regras_view():
                 f'<form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;padding:8px 0">'
                 f'<input type="hidden" name="acao" value="editar_regra"><input type="hidden" name="regra_id" value="{r["id"]}">'
                 f'<div><label style="font-size:12px;color:#888;display:block">Texto na descricao</label>'
-                f'<input name="padrao" value="{r["padrao"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px"></div>'
+                f'<input name="padrao" value="{esc(r["padrao"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px"></div>'
                 f'<div><label style="font-size:12px;color:#888;display:block">Categoria</label>'
                 f'<select name="categoria" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{cat_options_regra(r["categoria"])}</select></div>'
                 f'{dim_cols_edit}'
@@ -3119,7 +3144,7 @@ def grupos_view():
             f'<td style="padding-left:24px">'
             f'<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
             f'<input type="hidden" name="acao" value="editar_subgrupo"><input type="hidden" name="subgrupo_id" value="{s["id"]}">'
-            f'<input name="nome" value="{s["nome"]}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
+            f'<input name="nome" value="{esc(s["nome"])}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">'
             f'{input_num("teto_mensal", s["teto_mensal"])}{input_num("teto_anual", s["teto_anual"])}'
             f'<button type="submit" class="ver-btn">Salvar</button>'
             f'</form></td>'
@@ -3137,7 +3162,7 @@ def grupos_view():
           <div style="padding:0 18px 18px 18px">
             <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <input type="hidden" name="acao" value="editar_grupo"><input type="hidden" name="grupo_id" value="{g["id"]}">
-              <input name="nome" value="{g["nome"]}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
+              <input name="nome" value="{esc(g["nome"])}" style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;font-weight:600;width:220px">
               <span style="font-size:12px;color:#888">teto mensal</span>{input_num("teto_mensal", g["teto_mensal"])}
               <span style="font-size:12px;color:#888">teto anual</span>{input_num("teto_anual", g["teto_anual"])}
               <button type="submit" class="ver-btn">Salvar grupo</button>
@@ -3712,7 +3737,7 @@ def relatorios_dados():
     qtd_geral = totalizador["qtd"] or 0
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
-    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+    nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
 
     contas_by_id, _ = carregar_origens(cur)
 
@@ -3800,7 +3825,7 @@ def relatorios_lancamentos():
     rows = cur.fetchall()
 
     cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
-    nomes_cartao = {r["final4"]: r["prefixo"] for r in cur.fetchall()}
+    nomes_cartao = {r["final4"]: esc(r["prefixo"]) for r in cur.fetchall()}
 
     contas_by_id, _ = carregar_origens(cur)
 
@@ -4341,7 +4366,7 @@ def contas_view():
             </div>
             <form method="post" style="display:flex;gap:8px;align-items:center">
               <input type="hidden" name="item_id" value="{item_id}">
-              <input name="titular" list="sugestoes-titular" value="{titular_atual}" placeholder="De quem é essa conta?"
+              <input name="titular" list="sugestoes-titular" value="{esc(titular_atual)}" placeholder="De quem é essa conta?"
                      style="padding:7px 9px;border:1px solid #ccc;border-radius:6px;width:220px">
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
@@ -4478,7 +4503,7 @@ def categorias_view():
 
     def opcoes_destino(atual):
         return "".join(
-            f'<option value="{c}">{cat_pt(c)}</option>'
+            f'<option value="{esc(c)}">{cat_pt(c)}</option>'
             for c in todas if c != atual
         )
 
@@ -4719,7 +4744,7 @@ def usuarios_view():
               <input type="hidden" name="acao" value="permissoes">
               <input type="hidden" name="usuario" value="{c["usuario"]}">
               <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-                <input name="nome" value="{c["nome"] or ""}" placeholder="Nome"
+                <input name="nome" value="{esc(c["nome"]) if c["nome"] else ""}" placeholder="Nome"
                        style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;width:190px">
                 <span style="font-size:12px;color:var(--ink-faint)">Perfil</span>
                 <select name="perfil" onchange="aplicarPerfil(this)" data-usuario="{c["usuario"]}"
