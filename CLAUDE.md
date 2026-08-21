@@ -56,9 +56,11 @@ Na prática:
 ## Repositório e deploy
 
 - **GitHub**: `ronaldinhodelima/pe-de-meia` (branch `main`).
-  - `app.py` → app principal (Flask).
+  - `app.py`, `core.py`, `views/`, `templates/`, `static/` → app principal (Flask).
+  - `tests/` → suíte pytest.
   - `bussola/app.py` → worker de sincronização Pluggy.
-  - `Dockerfile` → build do app principal.
+  - `Dockerfile` → build do app principal. **Ao criar pasta nova, adicione o `COPY`** —
+    o container sobe sem ela e quebra só na hora de servir a tela.
 - **Coolify**: `https://coolify.brdrive.net`, projeto **Ronaldinho**.
   - App principal: nome `conferencia-cartao-app`, uuid `nvbnzjhig1og7s0gn5nrbxjo`.
     Domínio: **https://pedemeia.brdrive.net** (+ domínio padrão do Coolify como backup:
@@ -107,17 +109,18 @@ Na prática:
 - `schema_version` — controle de migração (ver `migrate()`). Cada bloco `if versao_atual < N`
   roda uma vez só; **não reescrever migração já aplicada** — criaria divergência de schema.
 
-## Modelo de natureza (5 categorias, base do DRE)
+## Modelo de natureza (6 naturezas, base do DRE)
 
-`despesa`, `receita`, `investimento`, `bem`, `transferencia`, e `fluxo` (default: direção do
-lançamento decide se é receita ou despesa — usado pra PIX/TED/dinheiro).
+`despesa`, `receita`, `investimento`, `bem`, `transferencia` e `fluxo` — este último é o
+padrão: a direção do lançamento decide se é receita ou despesa (usado pra PIX/TED/dinheiro).
+As três neutras (`investimento`, `bem`, `transferencia`) ficam fora do resultado.
 
 ## Sistema de permissões
 
-Perfis: `admin` (tudo), `operador` (lançamentos + relatórios + importar + sincronizar, sem
-cadastros/usuários), `leitura` (só ver lançamentos e relatórios). Permissões granulares:
+Perfis: `admin` (tudo), `operador` (lançamentos + relatórios + sincronizar, sem
+cadastros/usuários), `leitura` (só ver lançamentos e relatórios). As 8 permissões granulares:
 `lancamentos_ver`, `lancamentos_editar`, `lancamentos_conferir`, `lancamentos_manual`,
-`importar`, `relatorios`, `cadastros`, `sincronizar`, `usuarios`. Decorator `@requer(permissao)`
+`relatorios`, `cadastros`, `sincronizar`, `usuarios`. Decorator `@requer(permissao)`
 protege cada rota; `pode(permissao)` controla o que aparece na interface.
 
 Usuários atuais: `ronaldo` (admin), `andrea` (admin, herdado do sistema antigo), `amanda`
