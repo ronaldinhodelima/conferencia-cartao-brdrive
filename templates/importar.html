@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block conteudo %}
+<div class="cat-breakdown">
+  <h3>1. Escolha o arquivo</h3>
+  <div style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;line-height:1.6">
+    Aceita <strong>OFX</strong> (o mais confiável) ou <strong>CSV</strong> exportado do internet banking.
+    Use isto para completar períodos que o Pluggy não traz mais — a API dele devolve
+    no máximo os 500 lançamentos mais recentes de cada conta.<br>
+    Nada é gravado antes de você conferir a prévia, e reimportar o mesmo arquivo não duplica.
+  </div>
+  <form id="formImport" onsubmit="return enviarPreview(event)" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <input type="file" id="arquivo" accept=".ofx,.qfx,.csv,.txt" required
+           style="padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--surface)">
+    <select id="origem" required style="padding:8px 10px">
+      {% for val, curto, completo in origem_opcoes %}
+        <option value="{{ val }}">{{ completo }}</option>
+      {% endfor %}
+    </select>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft)">
+      <input type="checkbox" id="inverter" style="width:15px;height:15px;accent-color:var(--accent)">
+      Inverter sinal (+/−)
+    </label>
+    <button type="submit">Ver prévia</button>
+  </form>
+  <div id="msg" style="margin-top:12px;font-size:13px"></div>
+</div>
+
+<div id="blocoPreview" style="display:none">
+  <div class="cards" id="resumoPreview"></div>
+  <div class="cat-breakdown">
+    <h3>2. Confira e importe</h3>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px">
+      Linhas marcadas como <strong>já existe</strong> vêm desmarcadas — são lançamentos que já estão no
+      sistema com a mesma data e o mesmo valor. Se o sinal estiver invertido (despesa como entrada),
+      marque "Inverter sinal" e gere a prévia de novo.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button type="button" class="ver-btn" onclick="marcarTodos(true)">Marcar todos</button>
+      <button type="button" class="ver-btn" onclick="marcarTodos(false)">Desmarcar todos</button>
+      <button type="button" class="ver-btn" onclick="marcarSomenteNovos()">Só os novos</button>
+      <button type="button" id="btnImportar" onclick="confirmarImport()" style="margin-left:auto">Importar selecionados</button>
+    </div>
+    <div class="tabela-scroll">
+      <table class="compacta ajustavel" data-tabela="importar-preview">
+        <thead><tr>
+          <th class="cel-check">Imp</th><th class="cel-data">Data</th><th class="cel-desc">Descrição</th>
+          <th class="cel-valor" style="text-align:right">Valor</th><th class="cel-origem">Situação</th>
+        </tr></thead>
+        <tbody id="corpoPreview"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/importar.js"></script>
+{% endblock %}
