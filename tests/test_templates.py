@@ -71,3 +71,72 @@ class TestRegras:
     def test_sem_regras_mostra_aviso(self, ctx):
         html = app.render_template("regras.html", **self.BASE)
         assert "Nenhuma regra cadastrada ainda." in html
+
+
+class TestIndex:
+    """A tela de Lançamentos monta linha por linha a partir de dado do banco e do
+    Pluggy, e ainda entrega dois blocos JSON para o lancamentos.js ler."""
+
+    DIMS = [{"id": 1, "nome": "Responsável", "obrigatoria": True}]
+    VALS = {1: [{"id": 10, "dimensao_id": 1, "nome": "Ronaldo"}]}
+
+    def linha(self, **kw):
+        base = dict(
+            id="tx1", classes="", data_dia="13/08/26", data_hora="00:00",
+            data_full="13/08/2026 00:00", data_sort=1.0, descricao="COMPRA",
+            origem_selo='<span class="selo">UN</span>', origem_texto="Unicred",
+            origem_completa="Unicred · CC", categoria="Fuel", dims={1: 10},
+            valor_fmt="- R$ 10.00", valor_sort=-10.0, cor_valor="", observacao="",
+            conferida=False, duplicada=False,
+        )
+        base.update(kw)
+        return base
+
+    def render(self, ctx_linhas, **kw):
+        base = dict(
+            titulo="Lançamentos", topbar="", mes="2026-08", status="todas",
+            hoje_iso="2026-08-21", origem_filtro_html="", pode_editar=True,
+            pode_conferir=True, pode_manual=True,
+            categorias=[{"chave": "Fuel", "nome": "Combustível"}],
+            dimensoes=self.DIMS, valores_por_dim=self.VALS, naturezas=app.NATUREZAS,
+            linhas=ctx_linhas, por_categoria=[], receita_mes=0.0, gasto_real=0.0,
+            resultado_mes=0.0, conf=0, total=0,
+            detalhes_json="{}", config_json="{}",
+        )
+        base.update(kw)
+        return app.render_template("index.html", **base)
+
+    def test_descricao_e_escapada(self, ctx):
+        # descricao vem do banco (Pluggy ou lancamento manual digitado)
+        html = self.render([self.linha(descricao="<img src=x onerror=alert(1)>")])
+        assert "<img src=x" not in html
+        assert "&lt;img" in html
+
+    def test_apelido_do_cartao_e_escapado_mas_o_selo_nao(self, ctx):
+        # o apelido e digitado pelo usuario em /contas; o selo e HTML do proprio app
+        html = self.render([self.linha(origem_texto='"><script>alert(1)</script>')])
+        assert "<script>alert(1)</script>" not in html
+        assert '<span class="selo">UN</span>' in html
+
+    def test_dimensao_obrigatoria_sem_valor_fica_destacada(self, ctx):
+        html = self.render([self.linha(dims={1: None})])
+        assert "#c23c34;background:#fbeceb" in html
+
+    def test_dimensao_obrigatoria_preenchida_nao_destaca(self, ctx):
+        html = self.render([self.linha(dims={1: 10})])
+        assert "#c23c34;background:#fbeceb" not in html
+
+    def test_sem_permissao_de_editar_trava_os_campos(self, ctx):
+        html = self.render([self.linha()], pode_editar=False, pode_conferir=False)
+        assert html.count("disabled") >= 3
+
+    def test_sem_lancamentos_mostra_aviso_com_colspan_certo(self, ctx):
+        html = self.render([])
+        # 8 colunas fixas + 1 dimensao
+        assert 'colspan="9"' in html
+        assert "Nenhum lançamento neste filtro." in html
+
+    def test_natureza_fluxo_nao_aparece_no_modal(self, ctx):
+        # 'fluxo' e o padrao (direcao decide), nao faz sentido escolher na mao
+        html = self.render([self.linha()])
+        assert 'value="fluxo"' not in html

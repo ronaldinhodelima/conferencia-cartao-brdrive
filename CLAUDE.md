@@ -31,8 +31,14 @@ Na prática:
 
 ## Stack e arquitetura
 
-- **App principal**: `app.py` (Flask monolítico, um arquivo só, HTML/CSS/JS embutido via
-  f-strings — sem templates separados, sem framework front-end).
+- **App principal**: `app.py` (Flask) + `templates/` (Jinja2) + `static/` (CSS, JS, logos).
+  Sem framework front-end — JS puro. A view faz SQL e regra de negócio, o template só exibe.
+  **O escaping do Jinja é automático**: nada de `esc()` dentro de valor que vai para template
+  (gera `&quot;` visível na tela). Quando o valor já é HTML confiável montado no Python
+  (selo do banco, topbar, aviso de pendências), marque `|safe` explicitamente — assim fica
+  claro na revisão que foi decisão, não esquecimento. Para valor que entra em **string
+  JavaScript** (dentro de `onclick`/`onsubmit`), `|safe` e escape de HTML não bastam: use
+  `|tojson`.
 - **Banco**: PostgreSQL, schema `cartao.*` (rodando dentro do Coolify, host interno de rede
   Docker — não acessível de fora).
 - **Worker de sincronização**: `bussola/app.py` (serviço separado no Coolify) — busca dados do
@@ -188,17 +194,46 @@ Produto:
     o fechamento era uma constante única (`FATURA_DIA_FECHAMENTO`), que só servia para um cartão.
 17. `/cartoes` foi **fundido** em `/contas`, agora **"Configurações de Contas / Cartão"**:
     titular da conexão + nome de cada cartão (físico, virtual, adicional) + datas da fatura
-    (somente leitura). `/cartoes` redireciona para `/contas`.
+    (somente leitura).
 18. Navegação de mês (`‹ ›`) em Lançamentos e logo do topbar como link para o início.
+
+## Refatoração e limpeza (sessão 3 — 21/08/2026)
+
+`app.py` saiu de **5.612 para ~3.260 linhas**. Todo o HTML foi para `templates/` (Jinja) e o
+JS/CSS/logos para `static/`. As 11 telas foram migradas uma a uma, cada uma validada em
+produção antes da seguinte.
+
+**Cinco XSS latentes** apareceram na migração, todos em conteúdo de terceiro que era
+interpolado cru — o escaping automático do Jinja resolveu quatro; o do preview de importação
+era JS e foi corrigido com `escHtml`:
+descrição de arquivo importado, nome de aplicação (Pluggy), padrão de regra, nome de dimensão
+e valor de dimensão, e o apelido do cartão em `origem_curta()`.
+
+**Removido por não estar mais em uso:** a tela `/importar` inteira (3 rotas, 7 auxiliares, a
+permissão `importar`) — que aliás estava dando 500 desde `fcedcf1`, sem ninguém notar, porque
+tinha saído do menu. E os redirects legados `/cartoes` e `/naturezas`.
+
+### Como cortar código deste arquivo sem quebrar nada
+
+Duas vezes nesta sessão um corte por busca de texto apagou código vizinho por engano — uma
+delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derrubou
+`/relatorios` em produção. O que funciona:
+
+1. Delimitar a função pelo **AST** (`node.end_lineno`), nunca por "até o próximo `@app.route`"
+   — auxiliares sem decorator moram entre as rotas e são engolidos.
+2. Depois do corte, **comparar as definições de topo antes/depois**. Contar rotas não basta,
+   justamente porque o que se perde costuma ser função sem decorator.
+3. **302 não é prova de que a tela funciona** — é o redirect de login. Validação real só
+   logado, olhando o conteúdo.
+4. Em tela com número (DRE, relatórios), **anotar os valores em produção antes do deploy** e
+   comparar depois. Migração de tela não pode mexer em número.
 
 ## Pendências conhecidas
 
-**Dívida técnica principal — `app.py` monolítico (5.600+ linhas):**
-- 23% do arquivo (~82 KB) são os 3 logos em base64; deveriam virar arquivos em `static/`.
-- `index()` sozinha tem ~620 linhas misturando SQL, regra de negócio, HTML, CSS e JS.
-- O plano discutido foi separar em `templates/` (Jinja2, que ainda traria escaping automático
-  de graça), `static/` e blueprints por área. **Não foi feito** — na sessão 2 optamos pela
-  correção pontual de XSS, que resolveu o risco mas manteve a estrutura.
+**Blueprints (única etapa da refatoração que ficou):** `app.py` está em ~3.260 linhas, com
+todo o HTML em `templates/` e o JS/CSS em `static/`. Falta separar as rotas em blueprints por
+área (lançamentos, relatórios, cadastros, usuários). Não é urgente — o arquivo já cabe na
+cabeça — mas é o passo natural se voltar a crescer.
 
 **Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
 Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.
