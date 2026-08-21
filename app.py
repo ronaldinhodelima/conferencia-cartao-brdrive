@@ -1199,6 +1199,9 @@ BASE_CSS = BASE_CSS_HEAD + """
      da coluna vizinha, como planilha - nunca estoura a largura da tela. */
   table.ajustavel { width: 100% !important; min-width: 0 !important; table-layout: fixed; }
   table.ajustavel th[data-col] {
+    display: table-cell !important; /* classes como .cel-origem mudam o display so pra celula
+      de dado (flex, pra caber selo+texto) - sem isso o cabecalho herdava o mesmo display e
+      saia do grid da tabela, sobrepondo a coluna vizinha */
     position: relative; cursor: grab; user-select: none;
     font-size: 10px !important; font-weight: 600; line-height: 1.3; box-sizing: border-box;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1242,8 +1245,8 @@ BASE_CSS = BASE_CSS_HEAD + """
     font-size: 9.5px; font-weight: 700; letter-spacing: .02em;
     margin-right: 6px; vertical-align: middle; flex: none;
   }
-  .cel-origem { display: flex; align-items: center; }
-  .cel-origem > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.cel-origem { display: flex; align-items: center; }
+  td.cel-origem > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ---------- usuarios e permissoes ---------- */
   .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px; }
