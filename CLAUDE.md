@@ -38,7 +38,8 @@ Na prática:
   - `views/` — as 22 rotas em 6 blueprints: `auth`, `sistema`, `lancamentos`, `relatorios`,
     `cadastros`, `usuarios`. Cada módulo importa do `core` só os nomes que usa, listados
     explicitamente.
-  - `templates/` (Jinja2) e `static/` (CSS, JS, logos).
+  - `templates/` (Jinja2) e `static/` (CSS, JS, logos). **Nenhuma tela monta HTML por
+    f-string no Python** — se aparecer uma, é regressão.
   Sem framework front-end — JS puro. A view faz SQL e regra de negócio, o template só exibe.
   **O escaping do Jinja é automático**: nada de `esc()` dentro de valor que vai para template
   (gera `&quot;` visível na tela). Quando o valor já é HTML confiável montado no Python
@@ -252,10 +253,12 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
 
 ## Pendências conhecidas
 
-**`/relatorios` ainda monta HTML por f-string** (~342 linhas em `views/relatorios.py`).
-É a única das 12 telas que não foi para template Jinja — por isso `BASE_CSS` continua
-existindo no `core.py` (usado só por ela e pela página de "sem permissão" do decorator
-`requer`). Enquanto ela existir assim, o escaping ali é manual: usar `esc()`.
+**Escape em JS montado no cliente:** três telas montam HTML no navegador com `innerHTML`
+a partir de dados que chegam por AJAX (`lancamentos.js`, `relatorios.js`, `categorias.js`).
+Aí o Jinja não protege — quem escapa é o `escHtml()` do `tabelas.js`, no ponto onde o
+`innerHTML` é montado. A regra combinada: **o servidor manda texto puro** (`cat_pt_puro`,
+sem `esc()`) **e o JS escapa**. Não escapar no servidor também: gera escape duplo, e em
+rótulo de gráfico (Chart.js desenha em canvas) apareceria `&amp;` literal na tela.
 
 **Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
 Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.
