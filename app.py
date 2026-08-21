@@ -624,21 +624,22 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
         titulo = opt[2] if len(opt) > 2 else texto
         curto = opt[3] if len(opt) > 3 else None
         marcado = "checked" if str(val) in selecionados else ""
-        attr_curto = f' data-curto="{curto}"' if curto else ""
+        attr_curto = f' data-curto="{esc(curto)}"' if curto else ""
         partes.append(
-            f'<label class="chip-opt" data-tip="{titulo}"{attr_curto}>'
-            f'<input type="checkbox" name="{nome}" value="{val}" {marcado} '
-            f'onchange="{onchange}"> {texto}</label>'
+            f'<label class="chip-opt" data-tip="{esc(titulo)}"{attr_curto}>'
+            f'<input type="checkbox" name="{nome}" value="{esc(val)}" {marcado} '
+            f'onchange="{onchange}"> {esc(texto)}</label>'
         )
     opts_html = "".join(partes)
+    label_esc = esc(label)
     return f"""
     <div class="chipfilter">
-      <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label}" onclick="cfToggle(this)">
-        <span class="chip-plus">+</span> {label}{f' ({n_sel})' if n_sel else ''}
+      <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label_esc}" onclick="cfToggle(this)">
+        <span class="chip-plus">+</span> {label_esc}{f' ({n_sel})' if n_sel else ''}
         {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
       </button>
       <div class="chip-panel">
-        <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
+        <div class="chip-search-wrap"><input type="text" class="chip-search" placeholder="Procure {label_esc.lower()}..." oninput="cfFiltrar(this)" onkeydown="cfKeydown(event, this)"></div>
         <div class="chip-list">{opts_html}</div>
       </div>
     </div>
@@ -2485,7 +2486,7 @@ def dimensoes_view():
                     conn.commit()
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
-                    erro = f"Ja existe uma dimensao chamada '{nome}'."
+                    erro = f"Ja existe uma dimensao chamada '{esc(nome)}'."
         elif acao == "editar_dimensao":
             cur.execute(
                 "UPDATE cartao.dimensao SET nome=%s, obrigatoria=%s WHERE id=%s;",
@@ -2506,7 +2507,7 @@ def dimensoes_view():
                     conn.commit()
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
-                    erro = f"Ja existe o valor '{nome}' nessa dimensao."
+                    erro = f"Ja existe o valor '{esc(nome)}' nessa dimensao."
         elif acao == "editar_valor":
             cur.execute(
                 "UPDATE cartao.dimensao_valor SET nome=%s WHERE id=%s;",
@@ -3202,7 +3203,7 @@ def grupos_view():
     categorias_rows = "".join(
         f'<tr><td>{cat_pt(c)}</td><td>'
         f'<form method="post" onchange="this.submit()">'
-        f'<input type="hidden" name="acao" value="mapear_categoria"><input type="hidden" name="categoria" value="{c}">'
+        f'<input type="hidden" name="acao" value="mapear_categoria"><input type="hidden" name="categoria" value="{esc(c)}">'
         f'<select name="subgrupo_id" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px">{opcoes_subgrupo(c)}</select>'
         f'</form></td></tr>'
         for c in todas_categorias
@@ -4320,7 +4321,7 @@ def contas_view():
                     "ON CONFLICT (item_id) DO UPDATE SET titular = EXCLUDED.titular;",
                     (item_id, titular),
                 )
-                aviso = f'Titular salvo: "{titular}".'
+                aviso = f'Titular salvo: "{esc(titular)}".'
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -4434,7 +4435,7 @@ def categorias_view():
                     )
                     cur.execute("DELETE FROM cartao.categoria_oculta WHERE categoria = %s;", (nome,))
                     conn.commit()
-                    aviso = f'Categoria "{nome}" criada.'
+                    aviso = f'Categoria "{esc(nome)}" criada.'
 
             elif acao == "renomear":
                 categoria = request.form.get("categoria") or ""
@@ -4448,7 +4449,7 @@ def categorias_view():
                         (categoria, novo_nome),
                     )
                     conn.commit()
-                    aviso = f'Categoria renomeada para "{novo_nome}".'
+                    aviso = f'Categoria renomeada para "{esc(novo_nome)}".'
 
             elif acao == "mover":
                 origem = request.form.get("origem") or ""
@@ -4514,7 +4515,7 @@ def categorias_view():
         pode_excluir = qtd == 0
         btn_excluir = (
             f'<form method="post" onsubmit="return confirm(\'Remover a categoria {cat_pt(c)}?\')">'
-            f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="categoria" value="{c}">'
+            f'<input type="hidden" name="acao" value="excluir"><input type="hidden" name="categoria" value="{esc(c)}">'
             f'<button type="submit" class="ver-btn">Remover</button></form>'
             if pode_excluir else
             f'<span data-tip="Existem lançamentos nessa categoria. Mova-os para outra categoria antes de remover." '
@@ -4530,24 +4531,24 @@ def categorias_view():
         <tr>
           <td>
             <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="renomear"><input type="hidden" name="categoria" value="{c}">
+              <input type="hidden" name="acao" value="renomear"><input type="hidden" name="categoria" value="{esc(c)}">
               <input name="novo_nome" value="{cat_pt(c)}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:220px">
               <button type="submit" class="ver-btn">Salvar</button>
             </form>
-            <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">{c}</div>
+            <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">{esc(c)}</div>
           </td>
           <td class="valor">{qtd or "-"}</td>
           <td class="valor">{_fmt_moeda(total) if qtd else "-"}</td>
           <td>
             <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="natureza"><input type="hidden" name="categoria" value="{c}">
+              <input type="hidden" name="acao" value="natureza"><input type="hidden" name="categoria" value="{esc(c)}">
               <select name="natureza" onchange="this.form.submit()" style="padding:5px 7px;font-size:12px">{opts_natureza}</select>
               {aviso_nat}
             </form>
           </td>
           <td>
             <form method="post" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="acao" value="mover"><input type="hidden" name="origem" value="{c}">
+              <input type="hidden" name="acao" value="mover"><input type="hidden" name="origem" value="{esc(c)}">
               <select name="destino" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;max-width:180px">
                 <option value="">mover lançamentos para…</option>
                 {opcoes_destino(c)}
@@ -4651,7 +4652,7 @@ def usuarios_view():
                         (login, (request.form.get("novo_nome") or login.capitalize()).strip(),
                          hash_senha(senha), perfil, permissoes_do_perfil(perfil)),
                     )
-                    aviso = f'Usuário "{login}" criado.' if cur.fetchone() else "Já existe um usuário com esse login."
+                    aviso = f'Usuário "{esc(login)}" criado.' if cur.fetchone() else "Já existe um usuário com esse login."
 
             elif acao == "permissoes":
                 perfil = request.form.get("perfil") or "leitura"
@@ -4666,7 +4667,7 @@ def usuarios_view():
                         "UPDATE cartao.usuario SET perfil = %s, permissoes = %s, nome = %s WHERE usuario = %s;",
                         (perfil, marcadas, (request.form.get("nome") or "").strip() or alvo, alvo),
                     )
-                    aviso = f'Permissões de "{alvo}" atualizadas.'
+                    aviso = f'Permissões de "{esc(alvo)}" atualizadas.'
 
             elif acao == "senha":
                 nova = request.form.get("senha") or ""
@@ -4675,7 +4676,7 @@ def usuarios_view():
                 else:
                     cur.execute("UPDATE cartao.usuario SET senha_hash = %s WHERE usuario = %s;",
                                 (hash_senha(nova), alvo))
-                    aviso = f'Senha de "{alvo}" alterada.'
+                    aviso = f'Senha de "{esc(alvo)}" alterada.'
 
             elif acao == "ativar":
                 ativo = request.form.get("ativo") == "1"
@@ -4685,7 +4686,7 @@ def usuarios_view():
                     erro = "É preciso manter ao menos um administrador ativo."
                 else:
                     cur.execute("UPDATE cartao.usuario SET ativo = %s WHERE usuario = %s;", (ativo, alvo))
-                    aviso = f'Acesso de "{alvo}" ' + ("reativado." if ativo else "desativado.")
+                    aviso = f'Acesso de "{esc(alvo)}" ' + ("reativado." if ativo else "desativado.")
 
             elif acao == "excluir":
                 if alvo == session.get("user"):
@@ -4694,7 +4695,7 @@ def usuarios_view():
                     erro = "É preciso manter ao menos um administrador."
                 else:
                     cur.execute("DELETE FROM cartao.usuario WHERE usuario = %s;", (alvo,))
-                    aviso = f'Usuário "{alvo}" excluído.'
+                    aviso = f'Usuário "{esc(alvo)}" excluído.'
             conn.commit()
         except Exception as e:
             conn.rollback()
