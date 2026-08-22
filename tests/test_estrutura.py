@@ -306,3 +306,18 @@ def test_botao_de_filtro_nao_tem_sinal_de_mais():
     assert "chip-plus" not in (RAIZ / "core.py").read_text(encoding="utf-8")
     for nome in ("lancamentos.js", "relatorios.js"):
         assert "chip-plus" not in (RAIZ / "static" / nome).read_text(encoding="utf-8")
+
+
+def test_barra_da_tabela_e_refeita_quando_a_tabela_e_trocada():
+    """O filtro AJAX de Lancamentos troca a tabela por replaceWith.
+
+    A barra (campo de filtro + menu de colunas) guarda closures apontando para a
+    tabela em que foi criada. Sem refazer, ela continuaria controlando um
+    elemento fora do DOM: as colunas ja escondidas apareciam certas - porque a
+    ativacao nova reaplica o estado salvo - mas clicar no menu nao fazia mais
+    nada, o que e pior do que falhar de forma visivel.
+    """
+    js = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "barra.__tabela = table;" in js, "a barra precisa saber que tabela serve"
+    assert "barraAtual.__tabela !== table" in js, "precisa detectar que a tabela mudou"
+    assert "filtroAnterior" in js, "o texto digitado no filtro nao pode se perder na troca"

@@ -85,6 +85,22 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
 
   // 2) barra acima da tabela: campo de filtro na esquerda, "Redefinir colunas" na
   //    direita. Injetada automaticamente, uma vez por tabela.
+  // A barra guarda closures apontando para a tabela em que foi criada. Quando o
+  // filtro AJAX faz replaceWith, a tabela e outra e a barra antiga passaria a
+  // controlar um elemento fora do DOM - o menu de colunas parava de funcionar
+  // (as colunas ja escondidas continuavam certas, porque a ativacao nova
+  // reaplica o estado salvo, mas clicar no menu nao fazia mais nada).
+  // Por isso a barra guarda a tabela que serve, e e refeita quando muda.
+  const barraAtual = table.previousElementSibling &&
+    table.previousElementSibling.classList.contains('barra-colunas')
+      ? table.previousElementSibling : null;
+  let filtroAnterior = '';
+  if (barraAtual && barraAtual.__tabela !== table) {
+    const campoAntigo = barraAtual.querySelector('.filtro-tabela');
+    if (campoAntigo) filtroAnterior = campoAntigo.value;   // nao perde o que foi digitado
+    barraAtual.remove();
+  }
+
   if (!table.previousElementSibling || !table.previousElementSibling.classList.contains('barra-colunas')) {
     const barra = document.createElement('div');
     barra.className = 'barra-colunas';
@@ -118,8 +134,13 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
 
     barra.appendChild(esq);
     barra.appendChild(dir);
+    barra.__tabela = table;
     table.parentNode.insertBefore(barra, table);
     ativarFiltroTabela(table, busca, contador);
+    if (filtroAnterior) {
+      busca.value = filtroAnterior;
+      busca.dispatchEvent(new Event('input'));
+    }
   }
 
   function menuColunas() {
