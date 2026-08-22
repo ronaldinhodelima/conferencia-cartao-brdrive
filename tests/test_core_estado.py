@@ -157,3 +157,30 @@ class TestNomeDeCategoriaUnico:
             assert core.categoria_com_nome("Estacionamento") is None
         finally:
             core.CATEGORIAS_OCULTAS.discard("Parking")
+
+
+def test_recarregar_nunca_deixa_o_dicionario_vazio(monkeypatch):
+    """Com threads compartilhando o mesmo dicionario, um clear() seguido de
+    update() abriria uma janela em que outra requisicao leria o dicionario vazio
+    e mostraria a chave crua do Pluggy no lugar do nome da categoria.
+
+    O teste espia o dicionario durante a recarga: em nenhum momento ele pode
+    ficar sem os nomes que continuam existindo.
+    """
+    core.CATEGORIA_PT_DB.clear()
+    core.CATEGORIA_PT_DB.update({"Parking": "Estacionamento", "Sai": "Vai Sumir"})
+
+    vistos = []
+
+    class CursorEspiao(FakeCursor):
+        def fetchall(self):
+            vistos.append(dict(core.CATEGORIA_PT_DB))
+            return super().fetchall()
+
+    cur = CursorEspiao([[("Parking", "Estacionamento")], []])
+    monkeypatch.setattr(core, "get_conn", lambda: FakeConn(cur))
+    core.recarregar_categorias_db()
+
+    assert all("Parking" in v for v in vistos), "o nome sumiu durante a recarga"
+    assert core.CATEGORIA_PT_DB == {"Parking": "Estacionamento"}
+    assert "Sai" not in core.CATEGORIA_PT_DB, "o que saiu do banco tem que sair daqui"

@@ -548,10 +548,15 @@ def recarregar_categorias_db():
         conn.close()
     except Exception:
         return
-    CATEGORIA_PT_DB.clear()
+    # Atualiza primeiro e so depois remove o que saiu, em vez de clear()+update().
+    # Com varias threads atendendo ao mesmo tempo, o clear() abriria uma janela em
+    # que outra requisicao leria o dicionario vazio e mostraria a chave crua do
+    # Pluggy no lugar do nome.
     CATEGORIA_PT_DB.update(novos)
-    CATEGORIAS_OCULTAS.clear()
+    for chave in [c for c in CATEGORIA_PT_DB if c not in novos]:
+        CATEGORIA_PT_DB.pop(chave, None)
     CATEGORIAS_OCULTAS.update(ocultas)
+    CATEGORIAS_OCULTAS.difference_update([c for c in CATEGORIAS_OCULTAS if c not in ocultas])
 
 
 def get_ultima_sincronizacao():

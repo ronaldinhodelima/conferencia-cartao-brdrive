@@ -26,4 +26,11 @@ EXPOSE 8000
 #
 # --timeout 120 porque o botao "Atualizar agora" chama o worker de sync com
 # urllib usando timeout de 60s; o padrao do gunicorn (30s) mataria o worker antes.
-CMD ["gunicorn", "--preload", "-w", "2", "--timeout", "120", "-b", "0.0.0.0:8000", "app:app"]
+#
+# UM worker com threads, e nao varios workers: core.py mantem os apelidos de
+# categoria (CATEGORIA_PT_DB) em memoria e so os recarrega depois de um POST.
+# Com 2 processos, cada um tem a sua copia - renomear uma categoria atualizava a
+# de quem atendeu o POST, e o outro seguia servindo o nome antigo por tempo
+# indeterminado. Threads compartilham a memoria, entao a atualizacao vale para
+# todas as requisicoes, e ainda assim atende mais de uma por vez.
+CMD ["gunicorn", "--preload", "-w", "1", "--threads", "4", "--timeout", "120", "-b", "0.0.0.0:8000", "app:app"]
