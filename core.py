@@ -396,8 +396,10 @@ def carregar_origens(cur):
         contas_by_id[aid] = {
             **c, "banco": banco, "label": completo, "label_curto": curto, "selo": selo, "titular": titular,
         }
-        # (valor, html com selo, titulo do tooltip, texto sem html)
-        opcoes.append((aid, f"{selo}{curto}", completo, curto))
+        # (valor, texto puro, titulo do tooltip, texto curto, selo em HTML)
+        # o selo vai separado porque e HTML do proprio app: junto com o texto ele
+        # seria escapado e o usuario veria a marcacao crua no filtro
+        opcoes.append((aid, curto, completo, curto, selo))
     return contas_by_id, opcoes
 
 
@@ -407,7 +409,11 @@ IMPORT_NAMESPACE = uuid.UUID("6f1c2a52-0000-4000-8000-000000000042")
 def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()"):
     """Filtro em chip com dropdown, busca e multi-selecao.
 
-    opcoes: lista de (value, texto) ou (value, texto_curto, texto_completo).
+    opcoes: (valor, texto) e, opcionalmente, mais (titulo, texto_curto, selo_html).
+
+    O texto e sempre escapado - vem do banco. O selo, quando existe, e HTML
+    montado por selo_banco_html() e entra cru; por isso vem num campo separado,
+    e nao concatenado no texto.
     """
     n_sel = len(selecionados)
     partes = []
@@ -415,12 +421,13 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
         val, texto = opt[0], opt[1]
         titulo = opt[2] if len(opt) > 2 else texto
         curto = opt[3] if len(opt) > 3 else None
+        selo = opt[4] if len(opt) > 4 else ""
         marcado = "checked" if str(val) in selecionados else ""
         attr_curto = f' data-curto="{esc(curto)}"' if curto else ""
         partes.append(
             f'<label class="chip-opt" data-tip="{esc(titulo)}"{attr_curto}>'
             f'<input type="checkbox" name="{nome}" value="{esc(val)}" {marcado} '
-            f'onchange="{onchange}"> {esc(texto)}</label>'
+            f'onchange="{onchange}"> {selo}{esc(texto)}</label>'
         )
     opts_html = "".join(partes)
     label_esc = esc(label)

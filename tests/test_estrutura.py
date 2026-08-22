@@ -173,3 +173,25 @@ def test_todo_reload_por_js_guarda_a_posicao_antes():
                 linha = texto[:m.start()].count("\n") + 1
                 problemas.append(f"{caminho.name}:{linha}")
     assert not problemas, f"reload sem guardar a posicao antes: {problemas}"
+
+
+def test_selo_do_banco_nao_e_escapado_no_filtro_de_origem():
+    """O filtro de Origem mostra o selo colorido do banco antes do nome da conta.
+
+    O selo e HTML montado por selo_banco_html(). Quando a varredura de XSS passou
+    a escapar o texto da opcao, o selo vinha concatenado nesse texto e o usuario
+    passou a ver a marcacao crua ('<SPAN CLASS="SELO"...') dentro do dropdown.
+    Por isso o selo viaja num campo separado da tupla de opcoes.
+    """
+    import app  # noqa: F401
+    import core
+
+    with app.app.test_request_context("/"):
+        html = core.chip_filter_html(
+            "origem", "Origem",
+            [("a1", 'Conta <b>X</b>', "titulo", "curto", '<span class="selo">Nu</span>')],
+            [],
+        )
+    assert '<span class="selo">Nu</span>' in html, "o selo tem que renderizar como HTML"
+    assert "&lt;span" not in html, "o selo nao pode aparecer escapado"
+    assert "&lt;b&gt;" in html, "o nome da conta continua escapado"
