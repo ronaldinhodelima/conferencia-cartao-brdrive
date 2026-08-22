@@ -60,10 +60,12 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     const ocultas = estado.ocultas || [];
     colunasNaOrdemAtual().forEach(function (col) {
       const esconder = ocultas.indexOf(col) !== -1;
+      // classe, nao style inline: o CSS tem display:table-cell !important nos
+      // th[data-col] e o inline perderia - o cabecalho ficava e o corpo sumia
       const th = thead.querySelector('th[data-col="' + col + '"]');
-      if (th) th.style.display = esconder ? 'none' : '';
+      if (th) th.classList.toggle('coluna-oculta', esconder);
       table.querySelectorAll('td[data-col="' + col + '"]').forEach(function (td) {
-        td.style.display = esconder ? 'none' : '';
+        td.classList.toggle('coluna-oculta', esconder);
       });
     });
   }

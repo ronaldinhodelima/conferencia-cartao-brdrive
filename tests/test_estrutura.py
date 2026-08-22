@@ -334,3 +334,20 @@ def test_aviso_de_duplicadas_usa_a_mesma_normalizacao_da_validacao():
     codigo = (RAIZ / "views" / "cadastros.py").read_text(encoding="utf-8")
     assert "por_nome.setdefault(chave_alfa(c[\"nome\"])" in codigo
     assert "por_nome.setdefault(c[\"nome\"]" not in codigo
+
+
+def test_ocultar_coluna_vence_a_regra_defensiva_do_cabecalho():
+    """O CSS tem 'table.ajustavel th[data-col] { display: table-cell !important }'
+    - defesa contra classes de celula (.cel-origem usa flex) vazarem para o <th>.
+
+    Esconder coluna com style inline ou classe simples PERDE para esse !important:
+    o cabecalho continuava visivel e so a celula do corpo sumia, o que desalinhava
+    a tabela inteira. O seletor do ocultar precisa ser mais especifico.
+    """
+    css = (RAIZ / "static" / "app.css").read_text(encoding="utf-8")
+    assert "table.ajustavel th[data-col].coluna-oculta" in css
+    assert "table.ajustavel td[data-col].coluna-oculta" in css
+
+    js = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "classList.toggle('coluna-oculta'" in js
+    assert "th.style.display" not in js, "style inline perde para o !important do CSS"

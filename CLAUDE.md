@@ -272,6 +272,15 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
   elas **entram no resultado do DRE como gasto** sem ninguém ter decidido isso. É o tipo de
   coisa que infla despesa, contra a regra de ouro do projeto.
 
+### Ideias guardadas (decidir quando fizer sentido)
+
+**Lançamentos recorrentes / previstos.** Há gastos que se repetem em valor e
+intervalo fixos — a mesada de R$ 100 semanal é o caso mais claro, mas também
+assinaturas, seguros e parcelas. O sistema hoje só registra o que já aconteceu.
+Valeria um campo/marcação que identifique o lançamento como recorrente e permita
+**projetar os próximos com base no histórico** — para saber o compromisso do mês
+antes de ele acontecer. Levantado por Ronaldo em 22/08/2026, ao conciliar julho.
+
 ### Técnicas
 
 **Escape em JS montado no cliente:** três telas montam HTML no navegador com `innerHTML`

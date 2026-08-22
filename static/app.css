@@ -117,6 +117,13 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   table.ajustavel th[data-col]:active { cursor: grabbing; }
+  /* Esconder coluna precisa de seletor MAIS PESADO que a regra acima, que usa
+     display:table-cell !important. Um style inline ou uma classe simples perde:
+     entre duas declaracoes !important, quem ganha e a de maior especificidade.
+     Sem isto o cabecalho continuava visivel e so a celula do corpo sumia -
+     as colunas saiam do lugar. */
+  table.ajustavel th[data-col].coluna-oculta,
+  table.ajustavel td[data-col].coluna-oculta { display: none !important; }
   /* sem reordenar/ordenar o cursor de arrastar enganaria - volta ao padrao */
   table.ajustavel[data-sem-reordenar][data-sem-ordenar] th[data-col] { cursor: default; }
   table.ajustavel th[data-col].arrastando { opacity: .4; }
