@@ -74,7 +74,7 @@ function atualizarChipLabels() {
     const btn = cf.querySelector('.chip-btn');
     if (!btn) return;   // defensivo: so trata caixa de filtro de verdade
     const label = btn.dataset.label;
-    const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
+    const n = cf.querySelectorAll('input[type=checkbox][name]:checked').length;
     btn.classList.toggle('ativo', n > 0);
     // sem o '+': o botao abre um filtro, nao adiciona nada
     btn.innerHTML = label + (n ? ' (' + n + ')' : '') +

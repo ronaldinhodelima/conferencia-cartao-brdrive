@@ -69,7 +69,7 @@ function atualizarChipLabels() {
     const btn = cf.querySelector('.chip-btn');
     if (!btn) return;   // defensivo: so trata caixa de filtro de verdade
     const label = btn.dataset.label;
-    const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
+    const n = cf.querySelectorAll('input[type=checkbox][name]:checked').length;
     btn.classList.toggle('ativo', n > 0);
     // sem o '+': o botao abre um filtro, nao adiciona nada
     btn.innerHTML = label + (n ? ' (' + n + ')' : '') +
@@ -108,7 +108,9 @@ function coletarQuery() {
   const params = new URLSearchParams();
   params.set('visao', document.getElementById('selVisao').value);
   params.set('agrupar', document.getElementById('selAgrupar').value);
-  document.querySelectorAll('.chip-opt input[type=checkbox]:checked').forEach(cb => params.append(cb.name, cb.value));
+  // [name] exigido: .chip-opt e usada tambem pelos itens do menu de colunas, cujos
+  // checkboxes nao tem nome e nao sao filtro
+  document.querySelectorAll('.chip-opt input[type=checkbox][name]:checked').forEach(cb => params.append(cb.name, cb.value));
   const di = document.getElementById('inputDataIni').value;
   const df = document.getElementById('inputDataFim').value;
   if (di) params.set('data_ini', di);
