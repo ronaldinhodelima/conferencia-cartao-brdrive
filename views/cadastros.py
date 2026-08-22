@@ -290,7 +290,7 @@ def grupos_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    erro = None
+    erro = aviso = None
     if request.method == "POST":
         acao = request.form.get("acao")
         if acao == "criar_grupo":
