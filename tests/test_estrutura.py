@@ -195,3 +195,18 @@ def test_selo_do_banco_nao_e_escapado_no_filtro_de_origem():
     assert '<span class="selo">Nu</span>' in html, "o selo tem que renderizar como HTML"
     assert "&lt;span" not in html, "o selo nao pode aparecer escapado"
     assert "&lt;b&gt;" in html, "o nome da conta continua escapado"
+
+
+def test_filtro_de_tabela_existe_e_e_automatico():
+    """O campo de filtro e injetado pelo tabelas.js junto com a barra de colunas,
+    entao vale para toda tabela marcada como ajustavel - inclusive as que vierem
+    depois, sem precisar mexer no template."""
+    js = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "function ativarFiltroTabela" in js
+    assert "ativarFiltroTabela(table, busca, contador)" in js
+    assert "placeholder = 'Filtrar'" in js
+
+    # o texto da linha nao pode sair do textContent puro: as celulas trazem
+    # <select> cujas opcoes listam todas as categorias, e aí qualquer busca
+    # casaria com todas as linhas
+    assert "clone.querySelectorAll('select').forEach" in js

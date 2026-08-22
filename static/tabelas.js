@@ -60,19 +60,37 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     });
   }
 
-  // 2) botao "Redefinir colunas" injetado automaticamente (uma vez por tabela)
+  // 2) barra acima da tabela: campo de filtro na esquerda, "Redefinir colunas" na
+  //    direita. Injetada automaticamente, uma vez por tabela.
   if (!table.previousElementSibling || !table.previousElementSibling.classList.contains('barra-colunas')) {
     const barra = document.createElement('div');
     barra.className = 'barra-colunas';
-    barra.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px';
+    barra.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px';
+
+    const esq = document.createElement('div');
+    esq.style.cssText = 'display:flex;align-items:center;gap:8px';
+    const busca = document.createElement('input');
+    busca.type = 'search';
+    busca.className = 'filtro-tabela';
+    busca.placeholder = 'Filtrar';
+    busca.setAttribute('aria-label', 'Filtrar');
+    busca.style.cssText = 'padding:6px 9px;border:1px solid var(--line);border-radius:6px;font-size:13px;width:200px';
+    const contador = document.createElement('span');
+    contador.style.cssText = 'font-size:12px;color:var(--ink-faint)';
+    esq.appendChild(busca);
+    esq.appendChild(contador);
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ver-btn';
     btn.title = 'Volta a ordem, largura e ordenação das colunas ao padrão';
     btn.textContent = '↺ Redefinir colunas';
     btn.addEventListener('click', function () { redefinirColunas(chave); });
+
+    barra.appendChild(esq);
     barra.appendChild(btn);
     table.parentNode.insertBefore(barra, table);
+    ativarFiltroTabela(table, busca, contador);
   }
 
   // 3) ordem salva
@@ -295,3 +313,99 @@ function manterPosicaoAoSalvar() {
 }
 
 document.addEventListener('DOMContentLoaded', manterPosicaoAoSalvar);
+
+
+// ---- filtro de conteudo da tabela ----
+// Filtra no cliente: esconde as linhas que nao casam, sem ida ao servidor. So
+// enxerga o que ja esta carregado na tela - em Lancamentos, por exemplo, filtra
+// dentro do mes aberto, nao no historico inteiro.
+function normalizarBusca(texto) {
+  return String(texto == null ? '' : texto)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+// Texto que representa a linha para efeito de busca. Nao da para usar o
+// textContent puro: as celulas trazem <select> cujas opcoes listam TODAS as
+// categorias, entao qualquer busca casaria com todas as linhas. Aqui as opcoes
+// sao descartadas e entram, no lugar, o valor dos campos e a opcao escolhida.
+function textoFiltravelDaLinha(tr) {
+  if (tr.__textoFiltro != null) return tr.__textoFiltro;
+  const partes = [];
+  tr.querySelectorAll('td').forEach(function (td) {
+    const clone = td.cloneNode(true);
+    clone.querySelectorAll('select').forEach(function (s) { s.remove(); });
+    partes.push(clone.textContent);
+  });
+  tr.querySelectorAll('input').forEach(function (i) {
+    if (['checkbox', 'radio', 'hidden'].indexOf(i.type) === -1) partes.push(i.value);
+  });
+  tr.querySelectorAll('select').forEach(function (s) {
+    const opt = s.options[s.selectedIndex];
+    if (opt) partes.push(opt.textContent);
+  });
+  tr.__textoFiltro = normalizarBusca(partes.join(' '));
+  return tr.__textoFiltro;
+}
+
+function ativarFiltroTabela(table, campo, contador) {
+  const corpo = table.tBodies[0];
+  if (!corpo) return;
+  // tabela hierarquica (Centro de Custos): a linha com colspan abre um bloco e as
+  // seguintes sao filhas dela. Esconder linha solta quebraria a arvore - um
+  // subgrupo apareceria sem o centro de custo dele.
+  const hierarquica = !!corpo.querySelector('tr > td[colspan]');
+
+  // valor editado invalida o texto guardado daquela linha
+  table.addEventListener('input', function (e) {
+    const tr = e.target.closest('tr');
+    if (tr) tr.__textoFiltro = null;
+  });
+  table.addEventListener('change', function (e) {
+    const tr = e.target.closest('tr');
+    if (tr) tr.__textoFiltro = null;
+  });
+
+  function aplicar() {
+    const q = normalizarBusca(campo.value).trim();
+    const dados = Array.from(corpo.rows);
+
+    if (!q) {
+      dados.forEach(function (tr) { tr.style.display = ''; });
+      contador.textContent = '';
+      return;
+    }
+
+    const casa = dados.map(function (tr) { return textoFiltravelDaLinha(tr).indexOf(q) !== -1; });
+    const visivel = casa.slice();
+
+    if (hierarquica) {
+      let inicioBloco = -1;
+      dados.forEach(function (tr, i) {
+        const ehCabecalho = !!tr.querySelector(':scope > td[colspan]');
+        if (ehCabecalho) inicioBloco = i;
+        // filho que casa traz o cabecalho do bloco junto
+        if (!ehCabecalho && casa[i] && inicioBloco >= 0) visivel[inicioBloco] = true;
+      });
+      // cabecalho que casa mostra o bloco inteiro
+      let atual = -1;
+      dados.forEach(function (tr, i) {
+        const ehCabecalho = !!tr.querySelector(':scope > td[colspan]');
+        if (ehCabecalho) atual = casa[i] ? i : -1;
+        else if (atual >= 0) visivel[i] = true;
+      });
+    }
+
+    let n = 0;
+    dados.forEach(function (tr, i) {
+      tr.style.display = visivel[i] ? '' : 'none';
+      if (visivel[i]) n++;
+    });
+    contador.textContent = n + ' de ' + dados.length;
+  }
+
+  campo.addEventListener('input', aplicar);
+  campo.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { campo.value = ''; aplicar(); e.stopPropagation(); }
+  });
+}
