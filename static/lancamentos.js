@@ -168,12 +168,17 @@ function verDetalhes(id) {
     valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
     parcela: 'Parcela', conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
   };
+  // campos que tem tratamento proprio fora desta lista e nao podem ser repetidos
+  // aqui: 'categoria' virou o seletor logo abaixo do corpo do modal
+  const tratadosAparte = ['categoria'];
   let html = '';
   for (const k in labels) {
     html += '<div class="row"><span>' + labels[k] + '</span><span>' + escHtml(d[k]) + '</span></div>';
   }
+  // o resto sao as dimensoes (Responsável, Projeto, ...), que o servidor manda
+  // com o nome da dimensao como chave
   for (const k in d) {
-    if (!(k in labels) && k.charAt(0) !== '_') {
+    if (!(k in labels) && k.charAt(0) !== '_' && tratadosAparte.indexOf(k) === -1) {
       html += '<div class="row"><span>' + escHtml(k) + '</span><span>' + escHtml(d[k]) + '</span></div>';
     }
   }
