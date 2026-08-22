@@ -738,8 +738,22 @@ def categorias_view():
             "natureza": naturezas_atuais.get(c, NATUREZA_PADRAO),
         })
 
+    # Nomes iguais apontando para categorias diferentes: a renomeacao e so um
+    # apelido, a chave do Pluggy continua distinta. Isso vira linha duplicada no
+    # relatorio, vinculo separado no centro de custo e - o mais grave - naturezas
+    # que podem divergir sem ninguem ver, porque na tela sao "a mesma" categoria.
+    por_nome = {}
+    for c in categorias:
+        por_nome.setdefault(c["nome"], []).append(c)
+    duplicadas = [
+        {"nome": nome, "itens": itens,
+         "naturezas_divergem": len({i["natureza"] for i in itens}) > 1}
+        for nome, itens in sorted(por_nome.items()) if len(itens) > 1
+    ]
+
     return render_template(
         "categorias.html",
+        duplicadas=duplicadas,
         titulo="Gerenciar categorias",
         topbar=topbar_html("Gerenciar categorias", "categorias"),
         aviso=aviso,

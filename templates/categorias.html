@@ -29,6 +29,33 @@
   </div>
 </details>
 
+{% if duplicadas %}
+<div class="cat-breakdown" style="border-left:3px solid var(--bad)">
+  <h3>Nomes repetidos em categorias diferentes</h3>
+  <div style="font-size:12.5px;color:var(--ink-soft);line-height:1.6;margin-bottom:10px">
+    Renomear troca só o apelido — a categoria original do banco continua sendo outra. Com o
+    mesmo nome em duas delas, o <strong>relatório mostra linhas repetidas</strong> com o total
+    dividido, e cada uma tem seu próprio vínculo de centro de custo e sua própria natureza.
+    Para juntar: use a coluna <strong>“Mover lançamentos”</strong> para levar tudo de uma para
+    a outra e depois remova a que ficou vazia.
+  </div>
+  {% for d in duplicadas %}
+    <div class="cat-row" style="align-items:flex-start">
+      <span><strong>{{ d.nome }}</strong>
+        {% if d.naturezas_divergem %}
+          <span style="color:var(--bad);font-size:11.5px">— naturezas diferentes entre elas</span>
+        {% endif %}
+      </span>
+      <span style="font-size:12px;color:var(--ink-soft);text-align:right">
+        {% for i in d.itens %}
+          {{ i.chave }} · {{ i.qtd }} lanç. · {{ naturezas.get(i.natureza, i.natureza) }}{% if not loop.last %}<br>{% endif %}
+        {% endfor %}
+      </span>
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="cat-breakdown">
   <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px">
     Renomeie, defina a natureza contábil, mova lançamentos entre categorias ou remova categorias

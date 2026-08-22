@@ -350,12 +350,22 @@ def origem_label(tipo, connector_name, nome_conta, titular=None):
 
 
 def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
-    """Rotulo curto de origem, usado na UI ao lado do selo do banco."""
+    """Rotulo curto de origem, usado na UI SEMPRE ao lado do selo do banco.
+
+    Como o selo ja identifica o banco (o "Nu" roxo, o "UN" verde), repetir o nome
+    ao lado e redundante - "Nu Conta Corrente Nubank (Andrea)". Por isso o nome do
+    banco sai daqui quando ele tem selo proprio. Bancos sem selo conhecido caem no
+    generico de duas letras, que nao identifica sozinho, entao esses mantem o nome.
+
+    O rotulo completo (origem_label) continua trazendo o banco: ele aparece no
+    tooltip e no rotulo do grafico, onde nao ha selo ao lado.
+    """
     banco = detectar_banco(nome_conta, connector_name)
+    tem_selo = banco in BANCOS_ESTILO
     if tipo == "CREDIT":
-        base = f"Cartão {banco}"
+        base = "Cartão" if tem_selo else f"Cartão {banco}"
     elif tipo == "BANK":
-        base = f"Conta Corrente {banco}"
+        base = "Conta Corrente" if tem_selo else f"Conta Corrente {banco}"
     elif tipo == "MANUAL":
         base = "Dinheiro"
     else:
