@@ -252,7 +252,12 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
 2. Depois do corte, **comparar as definições de topo antes/depois**. Contar rotas não basta,
    justamente porque o que se perde costuma ser função sem decorator.
 3. **302 não é prova de que a tela funciona** — é o redirect de login. Validação real só
-   logado, olhando o conteúdo.
+   logado, olhando o conteúdo. **Depois do deploy, abrir todas as telas** (um `fetch` em cada
+   e conferir status 200 + ausência de traceback no corpo): variável usada mas atribuída só
+   dentro de um `if` passa por `py_compile`, passa pelos testes (que não executam view, porque
+   exigiriam banco) e só aparece quando alguém abre aquela tela. Já derrubou `/grupos`.
+4. **`replace` em código só com `assert` de que casou.** Um `replace` silencioso que não casa
+   deixa o código velho no lugar e a edição parece ter funcionado.
 4. Em tela com número (DRE, relatórios), **anotar os valores em produção antes do deploy** e
    comparar depois. Migração de tela não pode mexer em número.
 
@@ -275,6 +280,13 @@ Aí o Jinja não protege — quem escapa é o `escHtml()` do `tabelas.js`, no po
 `innerHTML` é montado. A regra combinada: **o servidor manda texto puro** (`cat_pt_puro`,
 sem `esc()`) **e o JS escapa**. Não escapar no servidor também: gera escape duplo, e em
 rótulo de gráfico (Chart.js desenha em canvas) apareceria `&amp;` literal na tela.
+
+**Um worker só, com threads (não aumente `-w`):** `core.py` guarda os apelidos de categoria
+(`CATEGORIA_PT_DB`) em memória e só recarrega depois de um POST. Com mais de um processo, cada
+um tem a sua cópia: renomear uma categoria atualiza a de quem atendeu o POST e o outro segue
+servindo o nome antigo por tempo indeterminado. Aconteceu em produção com `-w 2`. Se um dia
+precisar de mais paralelismo, aumente `--threads` (memória compartilhada), não `-w` — ou tire
+o cache de memória e leia do banco a cada requisição.
 
 **Gunicorn com `--preload` (não remova o preload):** o app roda em
 `gunicorn --preload -w 2 --timeout 120`. O `--preload` não é detalhe de performance —
