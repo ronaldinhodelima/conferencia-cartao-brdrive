@@ -124,7 +124,11 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
 
   function menuColunas() {
     const caixa = document.createElement('div');
-    caixa.className = 'chipfilter';
+    // classe propria, NAO 'chipfilter': aquela e varrida por atualizarChipLabels()
+    // e por coletarQuery(), que esperam um .chip-btn e checkboxes com name. O menu
+    // de colunas nao tem nem um nem outro - com a classe errada, o filtro de
+    // origem parava de funcionar (TypeError antes do fetch).
+    caixa.className = 'menu-colunas';
     const painel = document.createElement('div');
     painel.className = 'chip-panel';
     const abrir = document.createElement('button');

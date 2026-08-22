@@ -458,7 +458,7 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
     return f"""
     <div class="chipfilter">
       <button type="button" class="chip-btn {"ativo" if n_sel else ""}" data-label="{label_esc}" onclick="cfToggle(this)">
-        <span class="chip-plus">+</span> {label_esc}{f' ({n_sel})' if n_sel else ''}
+        {label_esc}{f' ({n_sel})' if n_sel else ''}
         {f'<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' if n_sel else ''}
       </button>
       <div class="chip-panel">

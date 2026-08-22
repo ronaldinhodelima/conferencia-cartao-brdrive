@@ -280,7 +280,7 @@
   .rel-grupo-row .barra { background: var(--bg); border-radius: 4px; height: 6px; margin-top: 4px; overflow: hidden; }
   .rel-grupo-row .barra div { background: var(--accent); height: 100%; border-radius: 4px; }
 
-  .chipfilter { position: relative; display: inline-block; }
+  .chipfilter, .menu-colunas { position: relative; display: inline-block; }
   .chip-btn {
     display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--line);
     border-radius: 20px; padding: 8px 14px; font-size: 13px; color: var(--ink-soft); cursor: pointer;
@@ -288,9 +288,9 @@
   }
   .chip-btn:hover { border-color: var(--ink-faint); color: var(--ink); }
   .chip-btn.ativo { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
-  .chip-btn .chip-plus { font-size: 15px; line-height: 1; }
   .chip-btn .chip-clear { margin-left: 2px; color: var(--ink-faint); font-weight: 700; }
   .chip-btn .chip-clear:hover { color: var(--bad); }
+  .menu-colunas .chip-panel { left: auto; right: 0; }
   .chip-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-2); width: 260px; z-index: 200; overflow: hidden; border: 1px solid var(--line); }
   .chip-panel.show { display: block; }
   .chip-search-wrap { padding: 10px; border-bottom: 1px solid var(--line-soft); }
@@ -314,7 +314,7 @@
      7px e ~36% menor que os 11px anteriores - parei aqui porque abaixo disso o
      algarismo deixa de ser legivel na maioria das telas. O negrito compensa o
      tamanho e a cor clara. */
-  .chip-qtd { margin-left: 5px; font-size: 7px; font-weight: 700; color: #b9bec7; font-variant-numeric: tabular-nums; }
+  .chip-qtd { margin-left: 5px; font-size: 8.4px; font-weight: 700; color: #b9bec7; font-variant-numeric: tabular-nums; }
 
   .rel-grupo-detalhe { background: var(--bg); border-radius: var(--radius-sm); margin: 4px 0 10px 0; overflow: hidden; }
   .rel-mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

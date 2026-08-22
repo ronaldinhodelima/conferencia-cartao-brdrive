@@ -279,3 +279,30 @@ def test_contador_do_chip_nao_vaza_para_o_texto_da_opcao():
         assert "lbl.textContent.trim()" not in js, f"{nome}: chip selecionado leria o numero"
         assert "opt.textContent.toLowerCase()" not in js, f"{nome}: a busca casaria com o numero"
         assert "textoDaOpcao(" in js
+
+
+def test_menu_de_colunas_nao_usa_a_classe_do_filtro():
+    """O menu "Colunas" nao pode ser .chipfilter.
+
+    atualizarChipLabels() varre .chipfilter esperando um .chip-btn com
+    data-label, e coletarQuery() varre os checkboxes de dentro esperando que
+    tenham name. O menu de colunas nao tem nem um nem outro: com a classe errada,
+    atualizarChipLabels estourava TypeError na primeira linha de aplicarFiltros()
+    e o filtro de origem parava de funcionar - sem erro visivel na tela.
+    """
+    tabelas = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "caixa.className = 'menu-colunas'" in tabelas
+    assert "caixa.className = 'chipfilter'" not in tabelas
+
+    for nome in ("lancamentos.js", "relatorios.js"):
+        js = (RAIZ / "static" / nome).read_text(encoding="utf-8")
+        # so checkbox com name e filtro
+        assert "input[type=checkbox]:checked" not in js, f"{nome}: pegaria checkbox sem name"
+        assert "if (!btn) return;" in js, f"{nome}: atualizarChipLabels precisa ser defensiva"
+
+
+def test_botao_de_filtro_nao_tem_sinal_de_mais():
+    """O botao abre um filtro, nao adiciona nada - o '+' confundia."""
+    assert "chip-plus" not in (RAIZ / "core.py").read_text(encoding="utf-8")
+    for nome in ("lancamentos.js", "relatorios.js"):
+        assert "chip-plus" not in (RAIZ / "static" / nome).read_text(encoding="utf-8")

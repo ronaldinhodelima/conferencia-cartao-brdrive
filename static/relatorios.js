@@ -67,16 +67,19 @@ function fmtMoeda(v) {
 function atualizarChipLabels() {
   document.querySelectorAll('.chipfilter').forEach(cf => {
     const btn = cf.querySelector('.chip-btn');
+    if (!btn) return;   // defensivo: so trata caixa de filtro de verdade
     const label = btn.dataset.label;
     const n = cf.querySelectorAll('input[type=checkbox]:checked').length;
     btn.classList.toggle('ativo', n > 0);
-    btn.innerHTML = '<span class="chip-plus">+</span> ' + label + (n ? ' (' + n + ')' : '') +
+    // sem o '+': o botao abre um filtro, nao adiciona nada
+    btn.innerHTML = label + (n ? ' (' + n + ')' : '') +
       (n ? '<span class="chip-clear" onclick="cfClear(event, this)">&times;</span>' : '');
   });
   // chips pequenos mostrando tudo que esta selecionado
   const cont = document.getElementById('chipsSel');
   if (cont) {
-    const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]:checked'));
+    // [name] exigido: checkbox sem nome (ex: o do menu de colunas) nao e filtro
+    const marcados = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox][name]:checked'));
     // curto/completo saem do DOM via textContent, que DECODIFICA o que o Jinja
     // escapou - voltar isso cru para innerHTML reabriria o XSS. Ex: um valor de
     // dimensao chamado "<img src=x onerror=...>" criado em /dimensoes.
@@ -97,7 +100,7 @@ document.addEventListener('click', function (e) {
 });
 function desmarcarFiltro(nome, valor) {
   // comparacao em JS em vez de seletor CSS: valor com aspas quebraria o seletor
-  const cb = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox]'))
+  const cb = Array.from(document.querySelectorAll('.chipfilter input[type=checkbox][name]'))
                   .find(c => c.name === nome && c.value === valor);
   if (cb) { cb.checked = false; aplicarFiltros(); }
 }
