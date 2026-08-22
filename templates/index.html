@@ -70,14 +70,14 @@
   </tr></thead>
   <tbody>
     {% for r in linhas %}
-      <tr class="{{ r.classes }}" data-id="{{ r.id }}" onclick="linhaClick(event, {{ r.id|tojson }})">
+      <tr class="{{ r.classes }}" data-id="{{ r.id }}">
         <td class="cel-data" data-col="data" data-tip="{{ r.data_full }}" data-sort="{{ r.data_sort }}">{{ r.data_dia }}<br>{{ r.data_hora }}</td>
         <td class="cel-desc" data-col="desc" data-tip="{{ r.descricao }}">{{ r.descricao }}</td>
         {# o selo e HTML gerado pelo app; o texto vem do apelido do cartao, digitado
            pelo usuario, entao vai escapado #}
         <td class="cel-origem" data-col="origem" data-tip="{{ r.origem_completa }}">{{ r.origem_selo|safe }}<span>{{ r.origem_texto }}</span></td>
         <td class="cel-dim" data-col="categoria">
-          <select class="cat-select" {{ 'disabled' if not pode_editar }} onchange="salvar({{ r.id|tojson }}, this)">
+          <select class="cat-select" {{ 'disabled' if not pode_editar }}>
             {% for c in categorias %}
               <option value="{{ c.chave }}" {{ 'selected' if c.chave == r.categoria }}>{{ c.nome }}</option>
             {% endfor %}
@@ -87,7 +87,7 @@
           <td class="cel-dim" data-col="dim_{{ d.id }}">
             <select class="dim-select" data-dim="{{ d.id }}"
                     {% if d.obrigatoria and not r.dims.get(d.id) %}style="border-color:#c23c34;background:#fbeceb"{% endif %}
-                    {{ 'disabled' if not pode_editar }} onchange="salvar({{ r.id|tojson }}, this)">
+                    {{ 'disabled' if not pode_editar }}>
               <option value="">(nao definido)</option>
               {% for v in valores_por_dim.get(d.id, []) %}
                 <option value="{{ v.id }}" {{ 'selected' if v.id == r.dims.get(d.id) }}>{{ v.nome }}</option>
@@ -96,8 +96,8 @@
           </td>
         {% endfor %}
         <td class="valor cel-valor" data-col="valor" style="{{ r.cor_valor }}" data-sort="{{ r.valor_sort }}">{{ r.valor_fmt }}</td>
-        <td class="cel-obs" data-col="obs"><input class="obs-input" type="text" value="{{ r.observacao }}" placeholder="obs..." {{ 'disabled' if not pode_editar }} onblur="salvar({{ r.id|tojson }}, this)"></td>
-        <td class="cel-check" data-col="check"><input class="conf-check" type="checkbox" {{ 'checked' if r.conferida }} {{ 'disabled' if not pode_conferir }} onchange="salvar({{ r.id|tojson }}, this)">
+        <td class="cel-obs" data-col="obs"><input class="obs-input" type="text" value="{{ r.observacao }}" placeholder="obs..." {{ 'disabled' if not pode_editar }}></td>
+        <td class="cel-check" data-col="check"><input class="conf-check" type="checkbox" {{ 'checked' if r.conferida }} {{ 'disabled' if not pode_conferir }}>
           <input class="dup-check" type="checkbox" {{ 'checked' if r.duplicada }} hidden></td>
         <td class="cel-status" data-col="status"><span class="status" id="status-{{ r.id }}">ok</span></td>
       </tr>
@@ -114,6 +114,16 @@
     <span class="close" onclick="fecharModal()">&times;</span>
     <h3>Detalhes do lançamento</h3>
     <div id="modalBody"></div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
+      <div style="font-size:13px;margin-bottom:6px">Categoria</div>
+      <select id="modalCategoria" onchange="salvarCategoriaModal()" {{ 'disabled' if not pode_editar }} style="width:100%;padding:7px 9px">
+        {% for c in categorias %}<option value="{{ c.chave }}">{{ c.nome }}</option>{% endfor %}
+      </select>
+      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
+        A categoria carrega a natureza contábil — mover o lançamento para a categoria
+        certa é o caminho preferido em vez de definir a natureza abaixo.
+      </div>
+    </div>
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
       <div style="font-size:13px;margin-bottom:6px">Natureza deste lançamento</div>
       <select id="modalNatureza" onchange="salvarNaturezaModal()" style="width:100%;padding:7px 9px">

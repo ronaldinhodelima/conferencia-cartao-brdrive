@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 
 {% block head_extra %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{# Chart.js servido localmente (v4.4.1, baixado do cdnjs). Vinha de CDN e era a
+   unica dependencia externa em runtime: com o CDN fora, o grafico sumia. #}
+<script src="/static/chart.umd.min.js"></script>
 {% endblock %}
 
 {% block conteudo %}

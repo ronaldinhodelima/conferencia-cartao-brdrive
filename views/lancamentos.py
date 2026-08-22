@@ -363,6 +363,73 @@ def excluir_lancamento_manual(transacao_id):
         return jsonify({"ok": False, "erro": str(e)}), 400
 
 
+@bp.route("/api/transacao/<transacao_id>")
+@requer("lancamentos_ver")
+def detalhes_transacao(transacao_id):
+    """Detalhes de um lancamento, para telas que nao carregam a tabela inteira.
+
+    A tela de Lancamentos ja recebe tudo embutido no HTML; quem usa isto e o modal
+    de /categorias, que precisa abrir um lancamento avulso.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "SELECT t.transacao_id, t.account_id, t.data_transacao, t.descricao, t.categoria, "
+        "COALESCE(t.valor_brl, t.valor_original) AS valor, t.valor_original, t.moeda_original, "
+        "t.status, t.tipo, t.numero_cartao_final, t.parcela_atual, t.parcela_total, "
+        "t.conferida, t.observacao, t.conferida_por, t.natureza, "
+        f"{NATUREZA_SQL} AS natureza_efetiva "
+        f"FROM cartao.transacao t {JOIN_NATUREZA} WHERE t.transacao_id = %s;",
+        (transacao_id,),
+    )
+    r = cur.fetchone()
+    if not r:
+        cur.close()
+        conn.close()
+        return jsonify({"ok": False, "erro": "Lançamento não encontrado."}), 404
+
+    contas_by_id, _ = carregar_origens(cur)
+    cur.execute("SELECT final4, prefixo FROM cartao.cartao_nome;")
+    nomes_cartao = {c["final4"]: c["prefixo"] for c in cur.fetchall()}
+    cur.close()
+    conn.close()
+
+    conta = contas_by_id.get(str(r["account_id"]))
+    if not conta:
+        origem = "-"
+    elif conta["tipo"] == "CREDIT" and r["numero_cartao_final"]:
+        apelido = nomes_cartao.get(r["numero_cartao_final"]) or f'final {r["numero_cartao_final"]}'
+        origem = f'{conta["label"]} - {apelido}'
+    else:
+        origem = conta["label"]
+
+    local = r["data_transacao"] - timedelta(hours=3) if r["data_transacao"] else None
+    return jsonify({
+        "ok": True,
+        "transacao_id": str(r["transacao_id"]),
+        "data": local.strftime("%d/%m/%Y %H:%M") if local else "-",
+        "descricao": r["descricao"] or "-",
+        "categoria": r["categoria"] or "",
+        "categoria_nome": cat_pt_puro(r["categoria"]),
+        "valor": f'R$ {float(r["valor"] or 0):,.2f}',
+        "valor_original": (
+            f'{float(r["valor_original"]):,.2f} {r["moeda_original"] or ""}'.strip()
+            if r["valor_original"] is not None else "-"
+        ),
+        "status": r["status"] or "-",
+        "tipo": r["tipo"] or "-",
+        "origem": origem,
+        "parcela": (
+            f'{r["parcela_atual"]}/{r["parcela_total"]}'
+            if r["parcela_total"] and r["parcela_total"] > 1 else "À vista"
+        ),
+        "conferida": "Sim" if r["conferida"] else "Não",
+        "conferida_por": r["conferida_por"] or "-",
+        "observacao": r["observacao"] or "-",
+        "natureza_efetiva": NATUREZAS.get(r["natureza_efetiva"], r["natureza_efetiva"]),
+    })
+
+
 @bp.route("/api/transacao/<transacao_id>", methods=["POST"])
 @requer("lancamentos_editar")
 def update_transacao(transacao_id):
@@ -391,31 +458,44 @@ def update_transacao(transacao_id):
         (transacao_id,),
     )
     faltando = [r[0] for r in cur.fetchall()]
-    bloqueada = bool(faltando) and data.get("conferida", False)
+    bloqueada = bool(faltando) and bool(data.get("conferida", False))
     conferida_final = data.get("conferida", False) and not bloqueada
 
     # natureza especifica deste lancamento ("" = volta a seguir a natureza da categoria)
     natureza = data.get("natureza")
     natureza = natureza if natureza in NATUREZAS else None
 
-    cur.execute(
-        "UPDATE cartao.transacao SET conferida = %s, duplicada = %s, observacao = %s, categoria = %s, "
-        "natureza = %s, "
-        "conferida_por = CASE WHEN %s THEN %s ELSE conferida_por END, "
-        "conferida_em = CASE WHEN %s THEN now() ELSE conferida_em END "
-        "WHERE transacao_id = %s;",
-        (
-            conferida_final,
-            data.get("duplicada", False),
-            data.get("observacao"),
-            data.get("categoria"),
-            natureza,
-            conferida_final,
-            session.get("user"),
-            conferida_final,
-            transacao_id,
-        ),
-    )
+    # So altera o que veio no payload. A tela de Lancamentos manda o lancamento
+    # inteiro a cada edicao, mas o modal de /categorias manda so a categoria - com
+    # UPDATE fixo de todas as colunas, isso apagaria conferida, duplicada e a
+    # observacao de quem so queria trocar a categoria.
+    sets, valores = [], []
+    if "conferida" in data:
+        sets += [
+            "conferida = %s",
+            "conferida_por = CASE WHEN %s THEN %s ELSE conferida_por END",
+            "conferida_em = CASE WHEN %s THEN now() ELSE conferida_em END",
+        ]
+        valores += [conferida_final, conferida_final, session.get("user"), conferida_final]
+    if "duplicada" in data:
+        sets.append("duplicada = %s")
+        valores.append(bool(data.get("duplicada")))
+    if "observacao" in data:
+        sets.append("observacao = %s")
+        valores.append(data.get("observacao"))
+    if "categoria" in data:
+        sets.append("categoria = %s")
+        valores.append(data.get("categoria"))
+    if "natureza" in data:
+        sets.append("natureza = %s")
+        valores.append(natureza)
+
+    if sets:
+        # os trechos do SET sao literais fixos daqui; so os valores vao por parametro
+        cur.execute(
+            f"UPDATE cartao.transacao SET {', '.join(sets)} WHERE transacao_id = %s;",
+            valores + [transacao_id],
+        )
     conn.commit()
     cur.close()
     conn.close()

@@ -26,6 +26,7 @@ from core import (
     get_conn,
     levantar_pendencias,
     recarregar_categorias_db,
+    pode,
     requer,
     selo_banco_html,
     topbar_html,
@@ -705,4 +706,7 @@ def categorias_view():
         categorias=categorias,
         naturezas=NATUREZAS,
         naturezas_neutras=NATUREZAS_NEUTRAS,
+        # o modal de detalhes deixa trocar a categoria do lancamento; quem so tem
+        # 'cadastros' e nao 'lancamentos_editar' ve o seletor travado (a API recusaria)
+        pode_editar=pode("lancamentos_editar"),
     )

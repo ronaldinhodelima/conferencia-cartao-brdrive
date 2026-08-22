@@ -185,7 +185,22 @@ function verDetalhes(id) {
   const selNat = document.getElementById('modalNatureza');
   selNat.options[0].textContent = 'Seguir a categoria (' + (d._natureza_efetiva || 'Despesa') + ')';
   selNat.value = d._natureza || '';
+  // espelha a categoria da linha; mudar aqui muda la e salva
+  const selCat = document.getElementById('modalCategoria');
+  const catLinha = trAtual ? trAtual.querySelector('.cat-select') : null;
+  if (selCat && catLinha) selCat.value = catLinha.value;
   document.getElementById('modalBg').classList.add('show');
+}
+
+function salvarCategoriaModal() {
+  if (!idAtualModal) return;
+  const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
+  if (!tr) return;
+  const selLinha = tr.querySelector('.cat-select');
+  selLinha.value = document.getElementById('modalCategoria').value;
+  salvar(idAtualModal, selLinha);
+  // a categoria carrega a natureza contabil, entao os totais do mes mudam
+  setTimeout(() => window.location.reload(), 600);
 }
 function salvarNaturezaModal() {
   if (!idAtualModal) return;
@@ -214,6 +229,9 @@ function fecharModal() {
   document.getElementById('modalBg').classList.remove('show');
   idAtualModal = null;
 }
+// o ESC e tratado no tabelas.js, que so tira a classe .show - aqui a tela limpa
+// o proprio estado
+window.aoFecharModal = function () { idAtualModal = null; };
 function excluirManual() {
   if (!idAtualModal) return;
   const d = window.detalhes[idAtualModal] || {};
@@ -225,11 +243,39 @@ function excluirManual() {
       else alert(res.erro || 'Não foi possível excluir.');
     });
 }
-function linhaClick(e, id) {
-  const tag = e.target.tagName;
-  if (['SELECT','INPUT','OPTION','BUTTON'].includes(tag)) return;
-  verDetalhes(id);
+// ---- delegacao dos eventos da tabela ----
+// Os handlers eram inline (onclick/onchange no HTML) com o id interpolado pelo
+// Jinja. O |tojson gera aspas duplas literais, que FECHAM o atributo antes da
+// hora: onclick="linhaClick(event, "abc-123")" vira onclick="linhaClick(event, "
+// e o resto do id vira atributo solto. Resultado: nem o modal abria nem as
+// edicoes salvavam. Com delegacao o id sai do data-id da linha e nada e
+// interpolado dentro de atributo - alem de continuar valendo para a tabela que
+// o filtro AJAX substitui.
+function idDaLinha(el) {
+  const tr = el.closest('tr[data-id]');
+  return tr ? tr.dataset.id : null;
 }
+
+document.addEventListener('click', function (e) {
+  const tr = e.target.closest('#tabela-lancamentos tbody tr[data-id]');
+  if (!tr) return;
+  if (['SELECT', 'INPUT', 'OPTION', 'BUTTON'].includes(e.target.tagName)) return;
+  verDetalhes(tr.dataset.id);
+});
+
+document.addEventListener('change', function (e) {
+  const el = e.target;
+  if (!el.matches('#tabela-lancamentos .cat-select, #tabela-lancamentos .dim-select, #tabela-lancamentos .conf-check')) return;
+  const id = idDaLinha(el);
+  if (id) salvar(id, el);
+});
+
+// blur nao borbulha; focusout sim
+document.addEventListener('focusout', function (e) {
+  if (!e.target.matches('#tabela-lancamentos .obs-input')) return;
+  const id = idDaLinha(e.target);
+  if (id) salvar(id, e.target);
+});
 const DUPLICADA_OBS_PADRAO = lerJson('script[data-config]', {}).duplicada_obs || '';
 const filaSalvar = {};
 function salvar(id, el) {

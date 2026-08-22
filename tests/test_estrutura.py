@@ -99,3 +99,40 @@ def test_todas_as_rotas_continuam_registradas():
         "/usuarios",
     }
     assert rotas == esperadas
+
+
+def test_tojson_nunca_dentro_de_atributo_html():
+    """|tojson e o escape certo para dentro de <script>, e errado dentro de atributo.
+
+    O filtro do Flask nao escapa aspas duplas, entao {{ x|tojson }} num atributo
+    delimitado por aspas duplas FECHA o atributo antes da hora:
+
+        onclick="f(event, {{ id|tojson }})"  ->  onclick="f(event, "abc")"
+
+    O navegador le onclick como 'f(event, ' - erro de sintaxe, o handler nunca
+    roda. Foi assim que a tela de Lancamentos parou de abrir os detalhes e de
+    salvar as edicoes, sem erro nenhum aparecer. Para passar dado ao JS: use
+    data-attribute + delegacao, ou um bloco <script type="application/json">.
+    """
+    import re
+
+    padrao = re.compile(r'=\s*"[^"\n]*\{\{[^}]*\|\s*tojson')
+    culpados = []
+    for caminho in sorted((RAIZ / "templates").glob("*.html")):
+        for numero, linha in enumerate(caminho.read_text(encoding="utf-8").splitlines(), 1):
+            if padrao.search(linha):
+                culpados.append(f"{caminho.name}:{numero}")
+    assert not culpados, f"|tojson dentro de atributo HTML: {culpados}"
+
+
+def test_nenhum_handler_inline_recebe_id_interpolado():
+    """Handlers inline com dado interpolado sao a origem do bug acima.
+
+    Os eventos da tabela de Lancamentos passaram a ser tratados por delegacao,
+    lendo o id do data-id da linha. Isto trava a volta do padrao antigo.
+    """
+    import re
+
+    html = (RAIZ / "templates" / "index.html").read_text(encoding="utf-8")
+    suspeitos = re.findall(r'on\w+="[^"]*\{\{[^}]*\br\.id\b[^}]*\}\}[^"]*"', html)
+    assert not suspeitos, f"handler inline com o id da linha: {suspeitos}"

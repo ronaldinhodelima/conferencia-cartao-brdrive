@@ -82,9 +82,11 @@
           <button type="submit" class="ver-btn" {{ 'disabled' if c.sou_eu }}>
             {{ 'Desativar acesso' if c.ativo else 'Reativar acesso' }}</button>
         </form>
-        {# o login vai para dentro de uma string JS: tojson escapa para esse contexto,
-           o escape de HTML sozinho nao serve aqui #}
-        <form method="post" onsubmit="return confirm('Excluir o usuário ' + {{ c.usuario|tojson }} + '? Esta ação não pode ser desfeita.')">
+        {# o login vai num data-attribute e a confirmacao e ligada por delegacao.
+           Interpolar dentro do onsubmit nao funciona: |tojson gera aspas duplas
+           literais, que fecham o atributo e deixam o handler sem compilar - ou
+           seja, o form era enviado SEM confirmar. #}
+        <form method="post" class="form-excluir-usuario" data-login="{{ c.usuario }}">
           <input type="hidden" name="acao" value="excluir">
           <input type="hidden" name="usuario" value="{{ c.usuario }}">
           <button type="submit" class="btn-perigo" {{ 'disabled' if c.sou_eu }}>Excluir</button>
@@ -112,6 +114,16 @@
 {% block scripts %}
 <script>
   const PERFIS = {{ perfis_permissoes|tojson }};
+
+  // confirmacao de exclusao por delegacao (ver a nota no form acima)
+  document.addEventListener('submit', function (e) {
+    const form = e.target.closest('.form-excluir-usuario');
+    if (!form) return;
+    const login = form.dataset.login || '';
+    if (!confirm('Excluir o usuário ' + login + '? Esta ação não pode ser desfeita.')) {
+      e.preventDefault();
+    }
+  });
   function aplicarPerfil(sel) {
     const perms = PERFIS[sel.value] || [];
     const grade = document.querySelector('.perm-grid[data-usuario="' + sel.dataset.usuario + '"]');

@@ -233,3 +233,16 @@ document.addEventListener('DOMContentLoaded', function () {
     ativarTabelaAjustavel(t, t.dataset.tabela);
   });
 });
+
+// ---- ESC fecha qualquer modal aberto (compartilhado por todas as telas) ----
+// Todas as telas usam a mesma marcacao .modal-bg + classe .show, entao um unico
+// handler cobre os detalhes do lancamento, a lista de lancamentos da categoria e
+// qualquer modal que venha depois. Cada tela limpa o proprio estado em
+// window.aoFecharModal (ex: o id do lancamento que estava aberto).
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  const abertos = document.querySelectorAll('.modal-bg.show');
+  if (!abertos.length) return;
+  abertos.forEach(function (m) { m.classList.remove('show'); });
+  if (typeof window.aoFecharModal === 'function') window.aoFecharModal();
+});

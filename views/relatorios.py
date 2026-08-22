@@ -528,7 +528,8 @@ def api_categoria_lancamentos():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT t.data_transacao, t.descricao, COALESCE(t.valor_brl, t.valor_original) AS valor "
+        "SELECT t.transacao_id, t.data_transacao, t.descricao, "
+        "COALESCE(t.valor_brl, t.valor_original) AS valor "
         "FROM cartao.transacao t WHERE t.categoria = %s ORDER BY t.data_transacao DESC LIMIT 300;",
         (categoria,),
     )
@@ -537,6 +538,8 @@ def api_categoria_lancamentos():
     conn.close()
     return jsonify([
         {
+            # o id vai junto para o modal poder abrir os detalhes do lancamento
+            "transacao_id": str(r["transacao_id"]),
             "data": (r["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y") if r["data_transacao"] else "-",
             "descricao": r["descricao"] or "-",
             "valor": float(r["valor"]) if r["valor"] is not None else 0,
