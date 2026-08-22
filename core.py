@@ -345,8 +345,8 @@ def origem_label(tipo, connector_name, nome_conta, titular=None):
     elif tipo == "MANUAL":
         base = "Dinheiro (manual)"
     else:
-        base = esc(nome_conta) or "Outra origem"
-    return f"{base} · {esc(titular)}" if titular else base
+        base = nome_conta or "Outra origem"
+    return f"{base} · {titular}" if titular else base
 
 
 def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
@@ -359,8 +359,8 @@ def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
     elif tipo == "MANUAL":
         base = "Dinheiro"
     else:
-        base = esc(nome_conta) or "Outra"
-    return f"{base} ({esc(titular)})" if titular else base
+        base = nome_conta or "Outra"
+    return f"{base} ({titular})" if titular else base
 
 
 def carregar_origens(cur):
@@ -1123,13 +1123,30 @@ def levantar_pendencias(cur):
         key=lambda c: chave_alfa(cat_pt(c)),
     )
 
-    cur.execute("SELECT COUNT(*) AS n FROM cartao.transacao WHERE natureza IS NOT NULL;")
-    natureza_manual = cur.fetchone()["n"]
+    # a natureza por lancamento saiu do modal de detalhes: quem ainda tiver uma
+    # marcada precisa poder revisar por aqui, senao vira excecao invisivel
+    cur.execute(
+        "SELECT t.transacao_id, t.data_transacao, t.descricao, t.categoria, t.natureza, "
+        "COALESCE(t.valor_brl, t.valor_original) AS valor "
+        "FROM cartao.transacao t WHERE t.natureza IS NOT NULL "
+        "ORDER BY t.data_transacao DESC;"
+    )
+    manuais = cur.fetchall()
 
     return {
         "sem_natureza": sem_natureza,
         "despesa_sem_centro": despesa_sem_centro,
-        "natureza_manual": natureza_manual,
+        "natureza_manual": len(manuais),
+        "manuais": [{
+            "id": str(m["transacao_id"]),
+            "data": (m["data_transacao"] - timedelta(hours=3)).strftime("%d/%m/%Y") if m["data_transacao"] else "-",
+            "descricao": m["descricao"] or "-",
+            "categoria": m["categoria"],
+            "categoria_nome": cat_pt_puro(m["categoria"]),
+            "natureza": m["natureza"],
+            "natureza_rotulo": NATUREZAS.get(m["natureza"], m["natureza"]),
+            "valor": float(m["valor"] or 0),
+        } for m in manuais],
         "total": len(sem_natureza) + len(despesa_sem_centro),
     }
 

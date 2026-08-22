@@ -332,12 +332,32 @@ def grupos_view():
             conn.commit()
         elif acao == "mapear_categoria":
             subgrupo_id = request.form.get("subgrupo_id") or None
+            categoria = request.form.get("categoria")
+            # a categoria so cabe em um subgrupo (ela e a chave primaria da tabela),
+            # entao vincular uma ja vinculada MOVE. Antes isso acontecia sem dizer
+            # nada e a categoria sumia do subgrupo antigo.
+            cur.execute(
+                "SELECT s.nome AS subgrupo, g.nome AS grupo FROM cartao.categoria_subgrupo cs "
+                "JOIN cartao.subgrupo_custo s ON s.id = cs.subgrupo_id "
+                "JOIN cartao.grupo_custo g ON g.id = s.grupo_id "
+                "WHERE cs.categoria = %s;",
+                (categoria,),
+            )
+            antes = cur.fetchone()
             cur.execute(
                 "INSERT INTO cartao.categoria_subgrupo (categoria, subgrupo_id) VALUES (%s,%s) "
                 "ON CONFLICT (categoria) DO UPDATE SET subgrupo_id = EXCLUDED.subgrupo_id;",
-                (request.form.get("categoria"), subgrupo_id),
+                (categoria, subgrupo_id),
             )
             conn.commit()
+            if antes:
+                aviso = (
+                    f'"{cat_pt_puro(categoria)}" foi movida de '
+                    f'{antes["grupo"]} › {antes["subgrupo"]} para cá — '
+                    "uma categoria pertence a um centro de custo por vez."
+                )
+            else:
+                aviso = f'"{cat_pt_puro(categoria)}" vinculada.'
 
     cur.execute("SELECT id, nome FROM cartao.grupo_custo;")
     grupos_db = sorted(cur.fetchall(), key=lambda g: chave_alfa(g["nome"]))
@@ -345,6 +365,10 @@ def grupos_view():
     subgrupos_db = sorted(cur.fetchall(), key=lambda s: chave_alfa(s["nome"]))
     cur.execute("SELECT categoria, subgrupo_id FROM cartao.categoria_subgrupo;")
     mapa_categoria = {r["categoria"]: r["subgrupo_id"] for r in cur.fetchall()}
+    nome_subgrupo = {
+        s["id"]: f'{next((g["nome"] for g in grupos_db if g["id"] == s["grupo_id"]), "")} › {s["nome"]}'
+        for s in subgrupos_db
+    }
     cur.close()
     conn.close()
 
@@ -360,7 +384,13 @@ def grupos_view():
     # cada categoria vira {chave, nome, subgrupo_id} - o template filtra por
     # subgrupo_id pra montar os chips e o dropdown de vincular
     categorias = [
-        {"chave": c, "nome": cat_pt_puro(c), "subgrupo_id": mapa_categoria.get(c)}
+        {
+            "chave": c,
+            "nome": cat_pt_puro(c),
+            "subgrupo_id": mapa_categoria.get(c),
+            # usado no dropdown para dizer de onde a categoria sairia
+            "subgrupo_nome": nome_subgrupo.get(mapa_categoria.get(c), ""),
+        }
         for c in todas_categorias
     ]
     categorias_por_subgrupo = {}
@@ -374,6 +404,7 @@ def grupos_view():
         titulo="Centro de Custos",
         topbar=topbar_html("Centro de Custos", "grupos"),
         erro=erro,
+        aviso=aviso,
         grupos=grupos_db,
         subgrupos_por_grupo=subgrupos_por_grupo,
         categorias=categorias,
@@ -537,6 +568,16 @@ def pendencias_view():
                 )
                 conn.commit()
                 aviso = f'"{cat_pt_puro(categoria)}" vinculada ao centro de custo.'
+        elif acao == "limpar_natureza":
+            # volta o lancamento a seguir a natureza da categoria dele
+            transacao_id = request.form.get("transacao_id")
+            if transacao_id:
+                cur.execute(
+                    "UPDATE cartao.transacao SET natureza = NULL WHERE transacao_id = %s;",
+                    (transacao_id,),
+                )
+                conn.commit()
+                aviso = "Lançamento voltou a seguir a natureza da categoria."
         elif acao == "ocultar":
             categoria = request.form.get("categoria")
             if categoria:

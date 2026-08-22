@@ -94,9 +94,20 @@
             <select name="categoria" onchange="this.form.submit()"
                     style="padding:4px 6px;border:1px solid #ccc;border-radius:6px;font-size:12px;color:var(--ink-faint)">
               <option value="">+ vincular categoria…</option>
-              {% for c in categorias if c.subgrupo_id != s.id %}
-              <option value="{{ c.chave }}">{{ c.nome }}</option>
-              {% endfor %}
+              {# Uma categoria so pode estar em um subgrupo (a chave primaria da
+                 tabela e a categoria). Escolher uma que ja esta vinculada MOVE ela
+                 - antes isso acontecia calado. Agora as duas situacoes ficam
+                 separadas e a opcao diz de onde a categoria sairia. #}
+              <optgroup label="Disponíveis">
+                {% for c in categorias if not c.subgrupo_id %}
+                  <option value="{{ c.chave }}">{{ c.nome }}</option>
+                {% endfor %}
+              </optgroup>
+              <optgroup label="Já vinculadas — escolher move para cá">
+                {% for c in categorias if c.subgrupo_id and c.subgrupo_id != s.id %}
+                  <option value="{{ c.chave }}">{{ c.nome }} — hoje em {{ c.subgrupo_nome }}</option>
+                {% endfor %}
+              </optgroup>
             </select>
           </form>
         </td>

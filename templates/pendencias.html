@@ -116,6 +116,38 @@
     "Imóveis / Terrenos" (natureza: aquisição de bem), e aí não importa se o meio foi PIX, cartão
     ou dinheiro. Isso é informativo, não é um erro.
   </div>
+
+  {# a natureza por lancamento saiu do modal de detalhes, entao a revisao passa a
+     ser feita aqui: ou move o lancamento de categoria, ou limpa a excecao #}
+  <div class="tabela-scroll" style="margin-top:12px">
+    <table class="compacta">
+      <thead><tr>
+        <th>Data</th><th>Descrição</th><th>Categoria</th><th>Natureza marcada</th>
+        <th style="text-align:right">Valor</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for m in pend.manuais %}
+          <tr>
+            <td style="white-space:nowrap">{{ m.data }}</td>
+            <td>{{ m.descricao }}</td>
+            <td>{{ m.categoria_nome }}</td>
+            <td>{{ m.natureza_rotulo }}</td>
+            <td class="valor">{{ m.valor|moeda }}</td>
+            <td style="white-space:nowrap">
+              <form method="post" style="display:inline">
+                <input type="hidden" name="acao" value="limpar_natureza">
+                <input type="hidden" name="transacao_id" value="{{ m.id }}">
+                <button type="submit" class="ver-btn"
+                        data-tip="Remove a excecao: o lançamento volta a seguir a natureza da categoria">
+                  Seguir a categoria
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 
