@@ -233,3 +233,16 @@ def test_migracoes_sao_sequenciais_e_registradas_uma_vez():
         f"blocos {versoes_bloco} mas gravam {sorted(versoes_gravadas)}"
     )
     assert len(versoes_gravadas) == len(set(versoes_gravadas)), "versao gravada mais de uma vez"
+
+
+def test_menu_de_colunas_nao_depende_de_funcao_de_outra_tela():
+    """O menu "Colunas" aparece em todas as telas, mas cfToggle() so existe em
+    lancamentos.js e relatorios.js - usar ela aqui quebraria /categorias,
+    /grupos e as demais com ReferenceError."""
+    tabelas = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    codigo = "\n".join(
+        "" if l.lstrip().startswith("//") else l for l in tabelas.splitlines()
+    )
+    assert "cfToggle(" not in codigo, "tabelas.js nao pode chamar cfToggle"
+    assert "function menuColunas" in tabelas
+    assert "aplicarOcultas();" in tabelas, "a preferencia salva precisa valer no carregamento"

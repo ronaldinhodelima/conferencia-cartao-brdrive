@@ -51,6 +51,29 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     if (th) th.style.width = px + 'px';
     table.querySelectorAll('td[data-col="' + col + '"]').forEach(td => { td.style.width = px + 'px'; });
   }
+  // ---- ocultar coluna ----
+  // Cada dimensao nova (Responsável, Projeto, Veículo...) vira mais uma coluna, e a
+  // tabela chega ao limite da tela rapido. Em vez de limitar quantas dimensoes
+  // existem, o usuario esconde as que nao usa no dia a dia - o dado continua la e
+  // continua editavel pelo modal de detalhes.
+  function aplicarOcultas() {
+    const ocultas = estado.ocultas || [];
+    colunasNaOrdemAtual().forEach(function (col) {
+      const esconder = ocultas.indexOf(col) !== -1;
+      const th = thead.querySelector('th[data-col="' + col + '"]');
+      if (th) th.style.display = esconder ? 'none' : '';
+      table.querySelectorAll('td[data-col="' + col + '"]').forEach(function (td) {
+        td.style.display = esconder ? 'none' : '';
+      });
+    });
+  }
+  function alternarColuna(col, mostrar) {
+    estado.ocultas = (estado.ocultas || []).filter(function (c) { return c !== col; });
+    if (!mostrar) estado.ocultas.push(col);
+    salvarEstado();
+    aplicarOcultas();
+  }
+
   function reordenarLinhas() {
     const ordem = colunasNaOrdemAtual();
     table.querySelectorAll('tbody tr').forEach(tr => {
@@ -83,14 +106,66 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ver-btn';
-    btn.title = 'Volta a ordem, largura e ordenação das colunas ao padrão';
+    btn.title = 'Volta a ordem, largura, ordenação e visibilidade das colunas ao padrão';
     btn.textContent = '↺ Redefinir colunas';
     btn.addEventListener('click', function () { redefinirColunas(chave); });
 
+    const dir = document.createElement('div');
+    dir.style.cssText = 'display:flex;gap:8px;align-items:center';
+    // tabela hierarquica tem linha com colspan, que nao acompanha coluna escondida
+    if (podeReordenar) dir.appendChild(menuColunas());
+    dir.appendChild(btn);
+
     barra.appendChild(esq);
-    barra.appendChild(btn);
+    barra.appendChild(dir);
     table.parentNode.insertBefore(barra, table);
     ativarFiltroTabela(table, busca, contador);
+  }
+
+  function menuColunas() {
+    const caixa = document.createElement('div');
+    caixa.className = 'chipfilter';
+    const painel = document.createElement('div');
+    painel.className = 'chip-panel';
+    const abrir = document.createElement('button');
+    abrir.type = 'button';
+    abrir.className = 'ver-btn';
+    abrir.textContent = '☰ Colunas';
+    abrir.title = 'Escolher quais colunas aparecem';
+    // toggle proprio: cfToggle() mora em lancamentos.js/relatorios.js e nao
+    // existe nas demais telas, onde este menu tambem aparece
+    abrir.addEventListener('click', function (e) {
+      e.stopPropagation();
+      const aberto = painel.classList.contains('show');
+      document.querySelectorAll('.chip-panel.show').forEach(function (p) { p.classList.remove('show'); });
+      if (!aberto) painel.classList.add('show');
+    });
+    document.addEventListener('click', function (e) {
+      if (!caixa.contains(e.target)) painel.classList.remove('show');
+    });
+
+    const lista = document.createElement('div');
+    lista.className = 'chip-list';
+    colunasNaOrdemAtual().forEach(function (col) {
+      const th = thead.querySelector('th[data-col="' + col + '"]');
+      // coluna sem titulo (a de status, no fim da tabela) nao entra no menu: nao
+      // ha rotulo para mostrar, e esconde-la nao ajuda em nada
+      const rotulo = th ? th.textContent.trim() : '';
+      if (!rotulo) return;
+      const item = document.createElement('label');
+      item.className = 'chip-opt';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = (estado.ocultas || []).indexOf(col) === -1;
+      cb.addEventListener('change', function () { alternarColuna(col, cb.checked); });
+      item.appendChild(cb);
+      item.appendChild(document.createTextNode(' ' + rotulo));
+      lista.appendChild(item);
+    });
+    painel.appendChild(lista);
+    caixa.appendChild(abrir);
+    caixa.appendChild(painel);
+    return caixa;
   }
 
   // 3) ordem salva
@@ -244,6 +319,9 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     if (estado.sort) ordenarLinhas(estado.sort.col, estado.sort.dir);
     atualizarIndicadores();
   }
+
+  // por ultimo: a preferencia de coluna escondida vale desde o carregamento
+  aplicarOcultas();
 }
 
 // ativa sozinho toda tabela marcada com class="ajustavel" e data-tabela="chave"
