@@ -564,7 +564,7 @@ def contas_view():
 def pendencias_view():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    aviso = None
+    aviso = erro = None
 
     if request.method == "POST":
         acao = request.form.get("acao")
@@ -590,6 +590,28 @@ def pendencias_view():
                 )
                 conn.commit()
                 aviso = f'"{cat_pt_puro(categoria)}" vinculada ao centro de custo.'
+        elif acao == "definir_natureza_lote":
+            # a maioria das categorias sem natureza e despesa mesmo; o risco esta nas
+            # poucas que nao sao. Decidir em bloco poupa atencao para essas.
+            natureza = request.form.get("natureza")
+            marcadas = [c for c in request.form.getlist("categoria") if c]
+            if natureza not in NATUREZAS:
+                erro = "Escolha uma natureza válida."
+            elif not marcadas:
+                erro = "Marque ao menos uma categoria."
+            else:
+                for categoria in marcadas:
+                    cur.execute(
+                        "INSERT INTO cartao.categoria_natureza (categoria, natureza) VALUES (%s,%s) "
+                        "ON CONFLICT (categoria) DO UPDATE SET natureza = EXCLUDED.natureza;",
+                        (categoria, natureza),
+                    )
+                conn.commit()
+                quantas = len(marcadas)
+                aviso = (
+                    f"{quantas} categoria{'s' if quantas > 1 else ''} "
+                    f"definida{'s' if quantas > 1 else ''} como {NATUREZAS[natureza]}."
+                )
         elif acao == "limpar_natureza":
             # volta o lancamento a seguir a natureza da categoria dele
             transacao_id = request.form.get("transacao_id")
@@ -632,6 +654,7 @@ def pendencias_view():
         titulo="Pendências de classificação",
         topbar=topbar_html("Pendências de classificação", "pendencias"),
         aviso=aviso,
+        erro=erro,
         pend=pend,
         grupos=grupos_db,
         subgrupos_por_grupo=subgrupos_por_grupo,

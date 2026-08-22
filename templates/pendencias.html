@@ -22,11 +22,34 @@
       ou transferência, ela está inflando a despesa e distorcendo o resultado do período.
       Se for uma categoria que você não usa, marque "Não uso" para escondê-la.
     </div>
+    {# acao em lote: a maioria destas e despesa mesmo; o que importa e separar as
+       poucas que nao sao. Decidir uma a uma gasta atencao onde nao ha risco. #}
+    <form method="post" id="formLote"
+          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;
+                 padding:10px;background:var(--bg);border-radius:var(--radius-sm)">
+      <input type="hidden" name="acao" value="definir_natureza_lote">
+      <button type="button" class="ver-btn" onclick="marcarTodasPendencias(true)">Marcar todas</button>
+      <button type="button" class="ver-btn" onclick="marcarTodasPendencias(false)">Limpar</button>
+      <span id="contaLote" style="font-size:12px;color:var(--ink-soft)">nenhuma marcada</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <select name="natureza" style="padding:6px 8px;font-size:13px">
+          {% for chave, rotulo in naturezas.items() %}
+          <option value="{{ chave }}" {% if chave == natureza_padrao %}selected{% endif %}>{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Aplicar às marcadas</button>
+      </span>
+    </form>
+
     <table class="compacta ajustavel" data-tabela="pend-natureza">
-      <thead><tr><th>Categoria</th><th>Definir natureza</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Categoria</th><th>Definir natureza</th><th></th></tr></thead>
       <tbody>
         {% for c in pend.sem_natureza %}
         <tr>
+          <td style="width:28px">
+            {# o checkbox mora no form de lote, la em cima, via atributo form= #}
+            <input type="checkbox" class="chk-lote" form="formLote" name="categoria" value="{{ c }}">
+          </td>
           <td>
             {{ nome_categoria(c) }}
             <div style="font-size:11px;color:var(--ink-faint)">{{ c }}</div>
@@ -151,4 +174,32 @@
 </div>
 {% endif %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function marcarTodasPendencias(valor) {
+    // so as linhas visiveis: se houver filtro ativo, "marcar todas" respeita ele
+    document.querySelectorAll('.chk-lote').forEach(function (cb) {
+      const tr = cb.closest('tr');
+      if (tr && tr.style.display === 'none') return;
+      cb.checked = valor;
+    });
+    atualizarContaLote();
+  }
+  function atualizarContaLote() {
+    const n = document.querySelectorAll('.chk-lote:checked').length;
+    document.getElementById('contaLote').textContent =
+      n === 0 ? 'nenhuma marcada' : (n === 1 ? '1 marcada' : n + ' marcadas');
+  }
+  document.addEventListener('change', function (e) {
+    if (e.target.classList.contains('chk-lote')) atualizarContaLote();
+  });
+  document.getElementById('formLote').addEventListener('submit', function (e) {
+    if (!document.querySelectorAll('.chk-lote:checked').length) {
+      e.preventDefault();
+      alert('Marque ao menos uma categoria.');
+    }
+  });
+</script>
 {% endblock %}
