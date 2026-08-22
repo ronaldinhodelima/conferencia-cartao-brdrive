@@ -805,13 +805,17 @@ def categorias_view():
     # apelido, a chave do Pluggy continua distinta. Isso vira linha duplicada no
     # relatorio, vinculo separado no centro de custo e - o mais grave - naturezas
     # que podem divergir sem ninguem ver, porque na tela sao "a mesma" categoria.
+    # agrupa por chave_alfa, a MESMA normalizacao usada por categoria_com_nome():
+    # ignora acento e caixa. Comparar o nome literal deixava passar justamente o
+    # caso mais dificil de ver na tela - "Transferencia Interna" e "Transferência
+    # Interna" sao duas categorias diferentes e parecem a mesma.
     por_nome = {}
     for c in categorias:
-        por_nome.setdefault(c["nome"], []).append(c)
+        por_nome.setdefault(chave_alfa(c["nome"]), []).append(c)
     duplicadas = [
-        {"nome": nome, "itens": itens,
+        {"nome": itens[0]["nome"], "itens": itens,
          "naturezas_divergem": len({i["natureza"] for i in itens}) > 1}
-        for nome, itens in sorted(por_nome.items()) if len(itens) > 1
+        for _, itens in sorted(por_nome.items()) if len(itens) > 1
     ]
 
     return render_template(

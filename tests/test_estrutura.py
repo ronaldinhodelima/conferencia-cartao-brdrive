@@ -321,3 +321,16 @@ def test_barra_da_tabela_e_refeita_quando_a_tabela_e_trocada():
     assert "barra.__tabela = table;" in js, "a barra precisa saber que tabela serve"
     assert "barraAtual.__tabela !== table" in js, "precisa detectar que a tabela mudou"
     assert "filtroAnterior" in js, "o texto digitado no filtro nao pode se perder na troca"
+
+
+def test_aviso_de_duplicadas_usa_a_mesma_normalizacao_da_validacao():
+    """categoria_com_nome() ignora acento e caixa ao BARRAR um nome repetido.
+
+    O aviso que LISTA as repetidas agrupava pelo nome literal, entao deixava
+    passar justamente o caso mais dificil de ver na tela: "Transferencia Interna"
+    e "Transferência Interna" sao duas categorias e parecem a mesma. As duas
+    pontas precisam usar chave_alfa().
+    """
+    codigo = (RAIZ / "views" / "cadastros.py").read_text(encoding="utf-8")
+    assert "por_nome.setdefault(chave_alfa(c[\"nome\"])" in codigo
+    assert "por_nome.setdefault(c[\"nome\"]" not in codigo
