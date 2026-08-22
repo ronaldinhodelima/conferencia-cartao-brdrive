@@ -59,6 +59,25 @@ def index():
     )
     qtd_por_origem = {str(r["account_id"]): r["n"] for r in cur.fetchall()}
 
+    # Possiveis duplicidades do mes: mesma conta, mesmo dia e mesmo valor. O Pluggy
+    # ja mandou o mesmo debito duas vezes (Cond Sta Lucia em 21/11/2025), e sem
+    # aviso isso vira despesa dobrada sem ninguem notar. Quem ja foi marcado como
+    # duplicada fica de fora - a decisao ja foi tomada.
+    cur.execute(
+        "SELECT array_agg(t.transacao_id::text) AS ids FROM cartao.transacao t "
+        "WHERE to_char(t.data_transacao, 'YYYY-MM') = %s "
+        "AND COALESCE(t.duplicada, false) = false "
+        "GROUP BY t.account_id, t.data_transacao::date, "
+        "COALESCE(t.valor_brl, t.valor_original), t.descricao "
+        "HAVING COUNT(*) > 1;",
+        (mes,),
+    )
+    ids_suspeitos = set()
+    grupos_suspeitos = 0
+    for r in cur.fetchall():
+        grupos_suspeitos += 1
+        ids_suspeitos.update(r["ids"] or [])
+
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
     categorias = sorted((categorias_db | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)) - CATEGORIAS_OCULTAS, key=lambda c: chave_alfa(cat_pt(c)))
@@ -244,6 +263,7 @@ def index():
             "observacao": r["observacao"] or "",
             "conferida": r["conferida"],
             "duplicada": r["duplicada"],
+            "suspeita_duplicidade": str(rid) in ids_suspeitos,
         })
 
         nomes_por_dim = {
@@ -301,6 +321,7 @@ def index():
         resultado_mes=receita_mes - gasto_real,
         conf=resumo["conferidas"] or 0,
         total=resumo["total"] or 0,
+        grupos_suspeitos=grupos_suspeitos,
         detalhes_json=json_script(detalhes_js),
         config_json=json_script({"duplicada_obs": DUPLICADA_OBS_PADRAO}),
     )

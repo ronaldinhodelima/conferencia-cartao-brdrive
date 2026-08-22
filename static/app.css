@@ -259,6 +259,11 @@
   .modal .close { float: right; cursor: pointer; color: var(--ink-faint); font-size: 20px; line-height: 1; transition: color .15s; }
   .modal .close:hover { color: var(--ink); }
 
+  /* possivel duplicidade: mesma conta, dia, valor e descricao. Marca discreta na
+     borda esquerda - nao pode competir com a linha 'duplicada' ja confirmada,
+     que fica riscada */
+  tr.suspeita-dup > td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+
   .cartao-cell { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ---------- nav ---------- */

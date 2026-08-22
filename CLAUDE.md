@@ -28,6 +28,9 @@ Na prática:
 - Respostas diretas, sem enrolação, com tópicos quando fizer sentido.
 - **Nunca inventar números ou informação** — se não souber, perguntar.
 - Interface do sistema em português.
+- **Ao classificar lançamento, sempre avaliar a melhor forma de distribuir e
+  organizar** — categoria, natureza, dimensão e projeto — em vez de só encaixar
+  no que já existe. Instrução dada em 22/08/2026, durante a conciliação.
 - **Nunca marcar o "conferido" (check OK) de um lançamento.** Esse campo é a
   assinatura de quem conferiu — só o Ronaldo ou outro usuário marca. O Claude pode
   ajustar categoria, dimensão, natureza e observação, mas o check é a confirmação
@@ -278,6 +281,18 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
   coisa que infla despesa, contra a regra de ouro do projeto.
 
 ### A validar com o usuário (dado que falta)
+
+**Andar de cima da residência alugado para a BRDrive.** A casa tem dois andares:
+a família mora no porão e a parte de cima é alugada para a BRDrive por
+R$ 1.500–1.700/mês. Isso significa que (a) há receita de aluguel a identificar
+nos recebimentos da BRDrive, hoje possivelmente confundida com pró-labore, e
+(b) parte da manutenção da casa é custo desse aluguel, não despesa doméstica.
+Levantado em 22/08/2026, a ajustar depois.
+
+**Duplicidades antigas.** O Pluggy já mandou o mesmo débito duas vezes (Cond Sta
+Lúcia, 21/11/2025 — conferido na conta, ocorreu uma vez só). A tela de
+Lançamentos agora avisa quando encontra repetição no mês aberto, mas **os meses
+anteriores nunca foram varridos**. Vale uma passada mês a mês.
 
 **Depósitos em espécie sem origem identificada.** A categoria `Transfer - Cash`
 tem 32 lançamentos; os maiores em 2026 são +R$ 16.197,64 (13/07), +R$ 12.029,00
