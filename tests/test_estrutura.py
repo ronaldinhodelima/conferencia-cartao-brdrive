@@ -136,3 +136,15 @@ def test_nenhum_handler_inline_recebe_id_interpolado():
     html = (RAIZ / "templates" / "index.html").read_text(encoding="utf-8")
     suspeitos = re.findall(r'on\w+="[^"]*\{\{[^}]*\br\.id\b[^}]*\}\}[^"]*"', html)
     assert not suspeitos, f"handler inline com o id da linha: {suspeitos}"
+
+
+def test_telas_de_cadastro_mantem_a_posicao_ao_salvar():
+    """Centro de Custos e Categorias reenviam o form e o servidor devolve a pagina
+    inteira, entao o navegador voltaria ao topo a cada alteracao. As duas telas
+    precisam chamar manterPosicaoAoSalvar(), definido em tabelas.js."""
+    for nome in ("grupos.html", "categorias.html"):
+        html = (RAIZ / "templates" / nome).read_text(encoding="utf-8")
+        assert "manterPosicaoAoSalvar()" in html, f"{nome} nao mantem a posicao ao salvar"
+
+    tabelas = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "function manterPosicaoAoSalvar" in tabelas

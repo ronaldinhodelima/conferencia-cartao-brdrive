@@ -246,3 +246,38 @@ document.addEventListener('keydown', function (e) {
   abertos.forEach(function (m) { m.classList.remove('show'); });
   if (typeof window.aoFecharModal === 'function') window.aoFecharModal();
 });
+
+// ---- manter a posicao da pagina ao salvar ----
+// As telas de cadastro (Centro de Custos, Categorias) reenviam o formulario e o
+// servidor devolve a pagina inteira. O navegador entao abre o documento novo no
+// topo, e quem estava editando um item la embaixo perde o lugar.
+//
+// Guardamos a posicao no sessionStorage antes do envio e voltamos para ela
+// quando a pagina nova chega. Chame no fim do <body>, com o DOM ja montado.
+function manterPosicaoAoSalvar() {
+  const CHAVE = 'pedemeia_pos_' + location.pathname;
+  const VALIDADE_MS = 15000;
+
+  document.addEventListener('submit', function () {
+    sessionStorage.setItem(CHAVE, JSON.stringify({
+      y: window.scrollY,
+      // o <details> de ajuda fica no topo: se voltasse fechado, tudo abaixo
+      // subiria e a rolagem cairia no lugar errado
+      abertos: Array.from(document.querySelectorAll('details')).map(function (d) { return d.open; }),
+      em: Date.now(),
+    }));
+  });
+
+  let estado = null;
+  try { estado = JSON.parse(sessionStorage.getItem(CHAVE) || 'null'); } catch (e) { estado = null; }
+  sessionStorage.removeItem(CHAVE);
+  if (!estado) return;
+  // envio cancelado (confirm recusado) deixa a posicao guardada sem navegacao
+  // nenhuma - sem esta checagem, a proxima visita a tela daria um pulo sozinho
+  if (Date.now() - (estado.em || 0) > VALIDADE_MS) return;
+
+  document.querySelectorAll('details').forEach(function (d, i) {
+    if ((estado.abertos || [])[i]) d.open = true;
+  });
+  window.scrollTo(0, estado.y || 0);
+}

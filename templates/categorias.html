@@ -137,4 +137,8 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="/static/categorias.js"></script>{% endblock %}
+{% block scripts %}
+<script src="/static/categorias.js"></script>
+{# salvar aqui recarrega a tela inteira; sem isto o navegador volta ao topo #}
+<script>manterPosicaoAoSalvar();</script>
+{% endblock %}
