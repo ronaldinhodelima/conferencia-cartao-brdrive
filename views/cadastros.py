@@ -20,6 +20,7 @@ from core import (
     aplicar_regras,
     cat_pt,
     cat_pt_puro,
+    categoria_com_nome,
     chave_alfa,
     detectar_banco,
     esc,
@@ -57,7 +58,7 @@ def dimensoes_view():
                     conn.commit()
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
-                    erro = f"Ja existe uma dimensao chamada '{esc(nome)}'."
+                    erro = f"Já existe uma dimensão chamada '{nome}'."
         elif acao == "editar_dimensao":
             cur.execute(
                 "UPDATE cartao.dimensao SET nome=%s, obrigatoria=%s WHERE id=%s;",
@@ -78,7 +79,7 @@ def dimensoes_view():
                     conn.commit()
                 except psycopg2.errors.UniqueViolation:
                     conn.rollback()
-                    erro = f"Ja existe o valor '{esc(nome)}' nessa dimensao."
+                    erro = f"Já existe o valor '{nome}' nessa dimensão."
         elif acao == "editar_valor":
             def to_num(v):
                 v = (v or "").strip().replace(",", ".")
@@ -152,8 +153,15 @@ def regras_view():
         if acao == "criar_regra":
             padrao = (request.form.get("padrao") or "").strip()
             categoria = request.form.get("categoria") or ""
+            cur.execute("SELECT id FROM cartao.regra_classificacao WHERE lower(padrao) = lower(%s);", (padrao,))
+            repetida = cur.fetchone() if padrao else None
             if not padrao:
                 erro = "Informe o texto/padrao a procurar na descricao."
+            elif repetida:
+                # duas regras com o mesmo texto: a segunda nunca decide nada,
+                # so confunde quem tenta entender por que um lancamento foi parar
+                # numa categoria
+                erro = f'Já existe uma regra para o texto "{padrao}".'
             else:
                 cur.execute(
                     "INSERT INTO cartao.regra_classificacao (padrao, categoria) VALUES (%s,%s) RETURNING id;",
@@ -292,7 +300,7 @@ def grupos_view():
                 conn.commit()
             except psycopg2.errors.UniqueViolation:
                 conn.rollback()
-                erro = f"Já existe um centro de custo chamado '{esc(nome)}'."
+                erro = f"Já existe um centro de custo chamado '{nome}'."
         elif acao == "editar_grupo":
             try:
                 cur.execute(
@@ -316,7 +324,7 @@ def grupos_view():
                 conn.commit()
             except psycopg2.errors.UniqueViolation:
                 conn.rollback()
-                erro = f"Já existe um subgrupo chamado '{esc(nome)}' nesse centro de custo."
+                erro = f"Já existe um subgrupo chamado '{nome}' nesse centro de custo."
         elif acao == "editar_subgrupo":
             try:
                 cur.execute(
@@ -438,12 +446,26 @@ def contas_view():
                     aviso = f"Nome do cartão final {final4} removido."
                 else:
                     cur.execute(
-                        "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s,%s) "
-                        "ON CONFLICT (final4) DO UPDATE SET prefixo = EXCLUDED.prefixo;",
-                        (final4, prefixo),
+                        "SELECT final4 FROM cartao.cartao_nome WHERE lower(prefixo) = lower(%s) "
+                        "AND final4 <> %s;",
+                        (prefixo, final4),
                     )
-                    conn.commit()
-                    aviso = f'Cartão final {final4} salvo como "{prefixo}".'
+                    ja_usado = cur.fetchone()
+                    if ja_usado:
+                        # dois cartoes com o mesmo apelido ficam indistinguiveis na
+                        # coluna Origem e no filtro
+                        erro = (
+                            f'O nome "{prefixo}" já é usado pelo cartão final '
+                            f'{ja_usado["final4"]}.'
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO cartao.cartao_nome (final4, prefixo) VALUES (%s,%s) "
+                            "ON CONFLICT (final4) DO UPDATE SET prefixo = EXCLUDED.prefixo;",
+                            (final4, prefixo),
+                        )
+                        conn.commit()
+                        aviso = f'Cartão final {final4} salvo como "{prefixo}".'
             else:
                 item_id = request.form.get("item_id")
                 titular = (request.form.get("titular") or "").strip()
@@ -648,8 +670,8 @@ def categorias_view():
                 nome = (request.form.get("nome") or "").strip()
                 if not nome:
                     erro = "Informe o nome da categoria."
-                elif nome in CATEGORIA_PT.values() or nome in CATEGORIA_PT_DB.values():
-                    erro = "Já existe uma categoria com esse nome."
+                elif categoria_com_nome(nome):
+                    erro = f'Já existe uma categoria chamada "{nome}".'
                 else:
                     cur.execute(
                         "INSERT INTO cartao.categoria (categoria, nome_pt) VALUES (%s,%s) "
@@ -663,8 +685,17 @@ def categorias_view():
             elif acao == "renomear":
                 categoria = request.form.get("categoria") or ""
                 novo_nome = (request.form.get("novo_nome") or "").strip()
+                conflito = categoria_com_nome(novo_nome, exceto=categoria)
                 if not novo_nome:
                     erro = "Informe o novo nome."
+                elif conflito:
+                    # sem isto, duas categorias diferentes ficam com o mesmo nome na
+                    # tela e o relatorio passa a mostrar linhas repetidas
+                    erro = (
+                        f'Já existe uma categoria chamada "{novo_nome}" '
+                        f'(a categoria "{conflito}"). Para juntar as duas, use '
+                        '"Mover lançamentos" e depois remova a que ficar vazia.'
+                    )
                 else:
                     cur.execute(
                         "INSERT INTO cartao.categoria (categoria, nome_pt) VALUES (%s,%s) "

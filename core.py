@@ -491,6 +491,30 @@ def cat_pt(categoria):
     return esc(cat_pt_puro(categoria))
 
 
+def categoria_com_nome(nome, exceto=None):
+    """Devolve a chave da categoria que ja usa esse nome, ou None.
+
+    Renomear categoria so troca o apelido - a chave do Pluggy continua distinta.
+    Sem esta checagem duas categorias diferentes acabam com o mesmo nome na tela,
+    e aí o relatorio mostra linhas repetidas, cada uma com seu vinculo de centro
+    de custo e sua propria natureza. Foi assim que "Estacionamento" acabou em tres
+    categorias.
+
+    A comparacao ignora acento e caixa: "Mercado" e "mercado" sao o mesmo nome
+    para quem le a tela.
+    """
+    alvo = chave_alfa(nome or "")
+    if not alvo:
+        return None
+    conhecidas = set(CATEGORIA_PT) | set(CATEGORIAS_EXTRA) | set(CATEGORIA_PT_DB)
+    for chave in conhecidas:
+        if chave == exceto or chave in CATEGORIAS_OCULTAS:
+            continue
+        if chave_alfa(cat_pt_puro(chave)) == alvo:
+            return chave
+    return None
+
+
 def chave_alfa(texto):
     """Chave de ordenacao alfabetica que ignora acentos, maiusculas/minusculas
     e espacos nas bordas - para que 'Água' venha antes de 'Banco', por exemplo."""

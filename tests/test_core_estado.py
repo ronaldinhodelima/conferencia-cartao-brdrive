@@ -115,3 +115,45 @@ class TestFiltroRelatorio:
         # motivo para recusar so porque o <input type=date> nunca gera assim
         cfg = self._cfg("/relatorios/dados?data_ini=2026-7-1")
         assert cfg["data_ini"] == "2026-7-1"
+
+
+class TestNomeDeCategoriaUnico:
+    """Renomear categoria so troca o apelido - a chave do Pluggy continua distinta.
+    Sem checagem, duas categorias diferentes ficam com o mesmo nome na tela e o
+    relatorio passa a mostrar linhas repetidas, cada uma com sua natureza."""
+
+    def setup_method(self):
+        self.antes = dict(core.CATEGORIA_PT_DB)
+        core.CATEGORIA_PT_DB.clear()
+        core.CATEGORIA_PT_DB.update({"Parking": "Estacionamento", "Shopping": "Compras"})
+
+    def teardown_method(self):
+        core.CATEGORIA_PT_DB.clear()
+        core.CATEGORIA_PT_DB.update(self.antes)
+
+    def test_acusa_nome_ja_usado_por_outra_categoria(self):
+        assert core.categoria_com_nome("Estacionamento") == "Parking"
+
+    def test_ignora_acento_e_caixa(self):
+        # para quem le a tela, "Compras" e "COMPRAS" sao o mesmo nome
+        assert core.categoria_com_nome("COMPRAS") == "Shopping"
+        assert core.categoria_com_nome("compras") == "Shopping"
+
+    def test_renomear_para_o_proprio_nome_nao_e_conflito(self):
+        assert core.categoria_com_nome("Estacionamento", exceto="Parking") is None
+
+    def test_nome_livre_passa(self):
+        assert core.categoria_com_nome("Categoria Inedita 123") is None
+
+    def test_nome_vazio_nao_acusa(self):
+        assert core.categoria_com_nome("") is None
+        assert core.categoria_com_nome("   ") is None
+
+    def test_categoria_oculta_nao_bloqueia_o_nome(self):
+        # categoria escondida nao aparece em lista nenhuma, entao o nome dela
+        # esta livre para ser reaproveitado
+        core.CATEGORIAS_OCULTAS.add("Parking")
+        try:
+            assert core.categoria_com_nome("Estacionamento") is None
+        finally:
+            core.CATEGORIAS_OCULTAS.discard("Parking")
