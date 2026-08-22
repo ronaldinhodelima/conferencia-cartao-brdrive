@@ -184,3 +184,14 @@ def test_recarregar_nunca_deixa_o_dicionario_vazio(monkeypatch):
     assert all("Parking" in v for v in vistos), "o nome sumiu durante a recarga"
     assert core.CATEGORIA_PT_DB == {"Parking": "Estacionamento"}
     assert "Sai" not in core.CATEGORIA_PT_DB, "o que saiu do banco tem que sair daqui"
+
+    def test_agrupar_por_ano(self):
+        # comparacao ano a ano ("quanto de troca de oleo a Tracker custou em cada
+        # ano") nao dava para fazer: so havia agrupamento por mes
+        cfg = self._cfg("/relatorios/dados?agrupar=ano")
+        assert cfg["agrupar"] == "ano"
+        assert cfg["group_expr"] == "to_char(t.data_transacao, 'YYYY')"
+
+    def test_agrupar_por_mes_continua_igual(self):
+        cfg = self._cfg("/relatorios/dados?agrupar=mes")
+        assert cfg["group_expr"] == "to_char(t.data_transacao, 'YYYY-MM')"

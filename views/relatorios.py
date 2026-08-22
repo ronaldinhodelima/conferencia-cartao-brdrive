@@ -230,7 +230,7 @@ def relatorios():
     ]
 
     agrupar_opcoes = [("categoria", "Categoria"), ("origem", "Origem"),
-                      ("cartao", "Cartão"), ("mes", "Período (mês)")]
+                      ("cartao", "Cartão"), ("mes", "Período (mês)"), ("ano", "Período (ano)")]
     agrupar_opcoes += [(f"dim_{d['id']}", d["nome"]) for d in dimensoes]
 
     return render_template(
@@ -264,7 +264,8 @@ def relatorios_dados():
 
     # agrupando por periodo o resultado e uma linha do tempo: ordena cronologicamente
     # (do mais antigo para o mais recente). Nos demais agrupamentos, maior valor primeiro.
-    ordem = f"{cfg['group_expr']} ASC" if cfg["agrupar"] == "mes" else "total DESC"
+    # periodo sai em ordem cronologica; o resto, do maior gasto para o menor
+    ordem = f"{cfg['group_expr']} ASC" if cfg["agrupar"] in ("mes", "ano") else "total DESC"
     cur.execute(
         f"SELECT {cfg['group_expr']} AS grupo, COUNT(*) AS qtd, SUM({cfg['soma_expr']}) AS total "
         f"FROM cartao.transacao t {cfg['join_natureza']} {cfg['join_extra']} "
@@ -308,6 +309,8 @@ def relatorios_dados():
         if cfg["agrupar"] == "origem":
             c = contas_by_id.get(str(g))
             return c["label"] if c else "(sem origem)"
+        if cfg["agrupar"] == "ano":
+            return str(g) if g else "(sem periodo)"
         if cfg["agrupar"] == "mes":
             # '2026-01' -> 'jan/26', mais legivel na linha do tempo
             try:

@@ -1115,6 +1115,9 @@ def _montar_filtro_relatorio(dimensoes):
         group_expr = "t.account_id::text"
     elif agrupar == "mes":
         group_expr = "to_char(t.data_transacao, 'YYYY-MM')"
+    elif agrupar == "ano":
+        # comparacao ano a ano: "quanto de troca de oleo a Tracker custou em cada ano"
+        group_expr = "to_char(t.data_transacao, 'YYYY')"
     elif agrupar.startswith("dim_") and agrupar.split("_", 1)[1].isdigit():
         # o int() ja impede injecao, mas sozinho ele estoura ValueError (500) em
         # "agrupar=dim_abc", que qualquer um alcanca editando a URL. Com o isdigit
