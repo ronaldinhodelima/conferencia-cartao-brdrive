@@ -310,7 +310,11 @@
      numero segue a ultima palavra em vez de ser empurrado para a borda direita
      pelo flex do <label>. O selo continua inline-block e acompanha a primeira. */
   label.chip-opt .chip-txt { flex: 1; min-width: 0; }
-  .chip-qtd { margin-left: 5px; font-size: 11px; font-weight: 700; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  /* Bem discreto: o numero e referencia de relance, nao informacao a ser lida.
+     7px e ~36% menor que os 11px anteriores - parei aqui porque abaixo disso o
+     algarismo deixa de ser legivel na maioria das telas. O negrito compensa o
+     tamanho e a cor clara. */
+  .chip-qtd { margin-left: 5px; font-size: 7px; font-weight: 700; color: #b9bec7; font-variant-numeric: tabular-nums; }
 
   .rel-grupo-detalhe { background: var(--bg); border-radius: var(--radius-sm); margin: 4px 0 10px 0; overflow: hidden; }
   .rel-mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
