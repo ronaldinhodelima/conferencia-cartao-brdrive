@@ -28,6 +28,11 @@ Na prática:
 - Respostas diretas, sem enrolação, com tópicos quando fizer sentido.
 - **Nunca inventar números ou informação** — se não souber, perguntar.
 - Interface do sistema em português.
+- **Nunca marcar o "conferido" (check OK) de um lançamento.** Esse campo é a
+  assinatura de quem conferiu — só o Ronaldo ou outro usuário marca. O Claude pode
+  ajustar categoria, dimensão, natureza e observação, mas o check é a confirmação
+  humana de que o lançamento foi conciliado. Vale também para lançamento manual
+  criado pelo Claude: nasce desmarcado.
 
 ## Stack e arquitetura
 
@@ -271,6 +276,14 @@ delas levou a rota `/dre` inteira, outra levou `_montar_filtro_relatorio` e derr
   Automotive, Bicycle, Cinema…). Sem natureza, o app assume `despesa` por padrão — ou seja,
   elas **entram no resultado do DRE como gasto** sem ninguém ter decidido isso. É o tipo de
   coisa que infla despesa, contra a regra de ouro do projeto.
+
+### A validar com o usuário (dado que falta)
+
+**Depósitos em espécie sem origem identificada.** A categoria `Transfer - Cash`
+tem 32 lançamentos; os maiores em 2026 são +R$ 16.197,64 (13/07), +R$ 12.029,00
+(10/08) e +R$ 8.072,30 (21/07). Estão em natureza `fluxo`, então **entram como
+receita**. Ronaldo não soube dizer a origem de cabeça (22/08/2026) — precisa ser
+caso a caso. Enquanto não for, esses valores podem estar inflando a receita.
 
 ### Ideias guardadas (decidir quando fizer sentido)
 
