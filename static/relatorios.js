@@ -29,7 +29,8 @@ function cfFiltrar(input) {
   const panel = input.closest('.chip-panel');
   const q = input.value.toLowerCase();
   panel.querySelectorAll('.chip-opt').forEach(opt => {
-    opt.style.display = opt.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+    // sem o contador: buscar "13" nao pode casar com a conta que tem 13 lancamentos
+    opt.style.display = textoDaOpcao(opt).toLowerCase().includes(q) ? 'flex' : 'none';
   });
   panel.querySelectorAll('.chip-hover').forEach(o => o.classList.remove('chip-hover'));
 }
@@ -81,7 +82,7 @@ function atualizarChipLabels() {
     // dimensao chamado "<img src=x onerror=...>" criado em /dimensoes.
     cont.innerHTML = marcados.map(cb => {
       const lbl = cb.closest('.chip-opt');
-      const curto = lbl.dataset.curto || lbl.textContent.trim();
+      const curto = lbl.dataset.curto || textoDaOpcao(lbl);
       const completo = lbl.getAttribute('data-tip') || curto;
       // nome/valor vao em data-attribute e o clique e tratado por delegacao - ver
       // a nota equivalente em lancamentos.js

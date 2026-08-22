@@ -261,3 +261,21 @@ def test_item_do_filtro_nao_herda_caixa_alta_do_rotulo():
     bloco = css[css.index("label.chip-opt {"):]
     bloco = bloco[:bloco.index("}")]
     assert "text-transform: none" in bloco
+
+
+def test_contador_do_chip_nao_vaza_para_o_texto_da_opcao():
+    """O numero de lancamentos mora DENTRO do span de texto da opcao, para fluir
+    junto da frase em vez de ser empurrado para a borda direita pelo flex.
+
+    Efeito colateral: textContent da opcao passa a incluir o numero. Ele nao pode
+    aparecer no chip pequeno de selecionado nem casar na busca do painel - quem
+    procura "61" quer o texto, nao a conta que tem 61 lancamentos.
+    """
+    tabelas = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "function textoDaOpcao" in tabelas
+
+    for nome in ("lancamentos.js", "relatorios.js"):
+        js = (RAIZ / "static" / nome).read_text(encoding="utf-8")
+        assert "lbl.textContent.trim()" not in js, f"{nome}: chip selecionado leria o numero"
+        assert "opt.textContent.toLowerCase()" not in js, f"{nome}: a busca casaria com o numero"
+        assert "textoDaOpcao(" in js

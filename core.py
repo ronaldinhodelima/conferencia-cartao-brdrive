@@ -443,10 +443,15 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
         attr_curto = f' data-curto="{esc(curto)}"' if curto else ""
         n = contagens.get(str(val))
         qtd = f'<span class="chip-qtd">{n}</span>' if n is not None else ""
+        # selo, texto e numero num span so: dentro dele o fluxo e inline, entao o
+        # numero acompanha a ultima palavra mesmo quando o nome quebra em duas
+        # linhas. Soltos no flex do <label>, o texto esticava e empurrava o numero
+        # para a borda direita, parecendo uma coluna.
         partes.append(
             f'<label class="chip-opt" data-tip="{esc(titulo)}"{attr_curto}>'
             f'<input type="checkbox" name="{nome}" value="{esc(val)}" {marcado} '
-            f'onchange="{onchange}"> {selo}{esc(texto)}{qtd}</label>'
+            f'onchange="{onchange}">'
+            f'<span class="chip-txt">{selo}{esc(texto)}{qtd}</span></label>'
         )
     opts_html = "".join(partes)
     label_esc = esc(label)

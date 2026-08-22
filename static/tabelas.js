@@ -393,6 +393,15 @@ function manterPosicaoAoSalvar() {
 document.addEventListener('DOMContentLoaded', manterPosicaoAoSalvar);
 
 
+// Texto de uma opcao de chip SEM o contador de lancamentos. O numero mora dentro
+// do span de texto para fluir junto da frase, entao textContent o inclui - e ele
+// nao pode vazar para o chip pequeno de selecionado nem para a busca do painel.
+function textoDaOpcao(label) {
+  const clone = label.cloneNode(true);
+  clone.querySelectorAll('.chip-qtd').forEach(function (q) { q.remove(); });
+  return clone.textContent.trim();
+}
+
 // ---- filtro de conteudo da tabela ----
 // Filtra no cliente: esconde as linhas que nao casam, sem ida ao servidor. So
 // enxerga o que ja esta carregado na tela - em Lancamentos, por exemplo, filtra
