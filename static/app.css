@@ -299,6 +299,8 @@
   .chip-opt { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--ink); }
   .chip-opt:hover, .chip-opt.chip-hover { background: var(--bg); }
   .chip-opt input { accent-color: var(--accent); width: 15px; height: 15px; }
+  /* quantos lancamentos a origem tem no mes aberto - discreto, so para comparar */
+  .chip-qtd { margin-left: auto; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
   .rel-grupo-detalhe { background: var(--bg); border-radius: var(--radius-sm); margin: 4px 0 10px 0; overflow: hidden; }
   .rel-mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

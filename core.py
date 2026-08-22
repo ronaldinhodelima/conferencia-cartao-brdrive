@@ -370,7 +370,9 @@ def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
         base = "Dinheiro"
     else:
         base = nome_conta or "Outra"
-    return f"{base} ({titular})" if titular else base
+    # separador em vez de parenteses: o rotulo aparece em lista estreita (filtro de
+    # origem) e o parentese so ocupava espaco
+    return f"{base} · {titular}" if titular else base
 
 
 def carregar_origens(cur):
@@ -416,7 +418,7 @@ def carregar_origens(cur):
 IMPORT_NAMESPACE = uuid.UUID("6f1c2a52-0000-4000-8000-000000000042")
 
 
-def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()"):
+def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros()", contagens=None):
     """Filtro em chip com dropdown, busca e multi-selecao.
 
     opcoes: (valor, texto) e, opcionalmente, mais (titulo, texto_curto, selo_html).
@@ -424,7 +426,12 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
     O texto e sempre escapado - vem do banco. O selo, quando existe, e HTML
     montado por selo_banco_html() e entra cru; por isso vem num campo separado,
     e nao concatenado no texto.
+
+    contagens: {valor: n} opcional. Mostra quantos lancamentos cada opcao tem no
+    periodo em que a tela esta - assim da para ver de relance de onde vem o
+    movimento do mes sem precisar filtrar um a um.
     """
+    contagens = contagens or {}
     n_sel = len(selecionados)
     partes = []
     for opt in opcoes:
@@ -434,10 +441,12 @@ def chip_filter_html(nome, label, opcoes, selecionados, onchange="aplicarFiltros
         selo = opt[4] if len(opt) > 4 else ""
         marcado = "checked" if str(val) in selecionados else ""
         attr_curto = f' data-curto="{esc(curto)}"' if curto else ""
+        n = contagens.get(str(val))
+        qtd = f'<span class="chip-qtd">{n}</span>' if n is not None else ""
         partes.append(
             f'<label class="chip-opt" data-tip="{esc(titulo)}"{attr_curto}>'
             f'<input type="checkbox" name="{nome}" value="{esc(val)}" {marcado} '
-            f'onchange="{onchange}"> {selo}{esc(texto)}</label>'
+            f'onchange="{onchange}"> {selo}{esc(texto)}{qtd}</label>'
         )
     opts_html = "".join(partes)
     label_esc = esc(label)
@@ -489,6 +498,17 @@ def cat_pt_puro(categoria):
 def cat_pt(categoria):
     """Nome da categoria já escapado, para interpolar direto em f-string de HTML."""
     return esc(cat_pt_puro(categoria))
+
+
+def rotulo_valor_dimensao(valor):
+    """Nome do valor de dimensao, com o icone na frente quando houver.
+
+    Usado na tabela de Lancamentos, no filtro e no relatorio - assim "Jeep" e
+    "Tracker" se distinguem de relance sem precisar ler.
+    """
+    icone = (valor.get("icone") or "").strip()
+    nome = valor.get("nome") or ""
+    return f"{icone} {nome}".strip() if icone else nome
 
 
 def categoria_com_nome(nome, exceto=None):
@@ -882,6 +902,14 @@ def migrate():
                 conn.rollback()
                 print("Aviso: indice unico de nome de categoria nao aplicado "
                       "(ha nomes repetidos na base?):", e)
+
+        if versao_atual < 5:
+            # Icone (emoji) opcional por valor de dimensao. Emoji e texto puro,
+            # entao funciona dentro de <option> - diferente do selo do banco, que
+            # e HTML e precisa de campo separado. Por isso aqui basta prefixar.
+            cur.execute("ALTER TABLE cartao.dimensao_valor ADD COLUMN IF NOT EXISTS icone varchar(8);")
+            cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (5);")
+            conn.commit()
 
         cur.close()
         conn.close()

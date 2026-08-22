@@ -17,6 +17,7 @@ from core import (
     aplicar_regras,
     aviso_pendencias_html,
     carregar_origens,
+    rotulo_valor_dimensao,
     cat_pt_puro,
     chave_alfa,
     chip_filter_html,
@@ -189,7 +190,7 @@ def relatorios():
 
     cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
     dimensoes = cur.fetchall()
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    cur.execute("SELECT id, dimensao_id, nome, icone FROM cartao.dimensao_valor ORDER BY nome;")
     valores_por_dim = {}
     for v in cur.fetchall():
         valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
@@ -224,7 +225,7 @@ def relatorios():
     ]
     filtros_chip += [
         chip_filter_html(f"dim_{d['id']}", d["nome"],
-                         [(v["id"], v["nome"]) for v in valores_por_dim.get(d["id"], [])],
+                         [(v["id"], rotulo_valor_dimensao(v)) for v in valores_por_dim.get(d["id"], [])],
                          cfg["dim_sel"].get(d["id"], []))
         for d in dimensoes if valores_por_dim.get(d["id"])
     ]

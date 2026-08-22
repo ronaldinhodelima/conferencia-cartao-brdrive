@@ -6,7 +6,7 @@ import os
 
 from flask import Flask
 
-from core import _fmt_moeda, _barra_html
+from core import _fmt_moeda, _barra_html, rotulo_valor_dimensao
 from views import auth, sistema, lancamentos, relatorios, cadastros, usuarios
 
 app = Flask(__name__)
@@ -39,7 +39,8 @@ def _filtro_num(v):
 
 @app.context_processor
 def _globais_template():
-    return {"barra": _barra_html}
+    # disponiveis em qualquer template, sem cada view precisar passar
+    return {"barra": _barra_html, "rotulo_dim": rotulo_valor_dimensao}
 
 
 # a ordem nao importa: nenhum blueprint disputa o mesmo caminho

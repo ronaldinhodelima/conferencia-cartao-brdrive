@@ -18,6 +18,7 @@ from core import (
     VAL_DESPESA,
     aplicar_regras,
     carregar_origens,
+    rotulo_valor_dimensao,
     cat_pt,
     cat_pt_puro,
     chave_alfa,
@@ -47,6 +48,16 @@ def index():
     conn.commit()
 
     contas_by_id, origem_opcoes = carregar_origens(cur)
+
+    # quantos lancamentos cada origem tem NO MES aberto. Nao entra o filtro de
+    # origem aqui de proposito: se entrasse, marcar uma origem zeraria a contagem
+    # das outras e o numero deixaria de servir para comparar.
+    cur.execute(
+        "SELECT account_id, COUNT(*) AS n FROM cartao.transacao "
+        "WHERE to_char(data_transacao, 'YYYY-MM') = %s GROUP BY account_id;",
+        (mes,),
+    )
+    qtd_por_origem = {str(r["account_id"]): r["n"] for r in cur.fetchall()}
 
     cur.execute("SELECT DISTINCT categoria FROM cartao.transacao WHERE categoria IS NOT NULL;")
     categorias_db = {r["categoria"] for r in cur.fetchall()}
@@ -111,7 +122,7 @@ def index():
     cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
     dimensoes = cur.fetchall()
 
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    cur.execute("SELECT id, dimensao_id, nome, icone FROM cartao.dimensao_valor ORDER BY nome;")
     valores_por_dim = {}
     for v in cur.fetchall():
         valores_por_dim.setdefault(v["dimensao_id"], []).append(v)
@@ -236,7 +247,7 @@ def index():
         })
 
         nomes_por_dim = {
-            d["id"]: {v["id"]: v["nome"] for v in valores_por_dim.get(d["id"], [])}
+            d["id"]: {v["id"]: rotulo_valor_dimensao(v) for v in valores_por_dim.get(d["id"], [])}
             for d in dimensoes
         }
         detalhes = {
@@ -270,7 +281,10 @@ def index():
         mes=mes,
         status=status,
         hoje_iso=datetime.now().strftime("%Y-%m-%d"),
-        origem_filtro_html=chip_filter_html("origem", "Origem", origem_opcoes, origem_sel, onchange="aplicarFiltros()"),
+        origem_filtro_html=chip_filter_html(
+            "origem", "Origem", origem_opcoes, origem_sel,
+            onchange="aplicarFiltros()", contagens=qtd_por_origem,
+        ),
         pode_editar=pode_editar,
         pode_conferir=pode_conferir,
         pode_manual=pode_manual,

@@ -90,7 +90,8 @@
                     {{ 'disabled' if not pode_editar }}>
               <option value="">(nao definido)</option>
               {% for v in valores_por_dim.get(d.id, []) %}
-                <option value="{{ v.id }}" {{ 'selected' if v.id == r.dims.get(d.id) }}>{{ v.nome }}</option>
+                {# emoji e texto puro, entao cabe dentro de <option> #}
+                <option value="{{ v.id }}" {{ 'selected' if v.id == r.dims.get(d.id) }}>{{ rotulo_dim(v) }}</option>
               {% endfor %}
             </select>
           </td>

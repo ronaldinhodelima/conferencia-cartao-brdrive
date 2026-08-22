@@ -85,11 +85,14 @@ def dimensoes_view():
                 v = (v or "").strip().replace(",", ".")
                 return float(v) if v else None
             cur.execute(
-                "UPDATE cartao.dimensao_valor SET nome=%s, teto_mensal=%s, teto_anual=%s WHERE id=%s;",
+                "UPDATE cartao.dimensao_valor SET nome=%s, teto_mensal=%s, teto_anual=%s, "
+                "icone=%s WHERE id=%s;",
                 (
                     (request.form.get("nome") or "").strip(),
                     to_num(request.form.get("teto_mensal")),
                     to_num(request.form.get("teto_anual")),
+                    # varchar(8): cabe um emoji (que pode ter varios code points)
+                    ((request.form.get("icone") or "").strip() or None),
                     request.form.get("valor_id"),
                 ),
             )
@@ -226,7 +229,7 @@ def regras_view():
 
     cur.execute("SELECT id, nome, obrigatoria FROM cartao.dimensao ORDER BY ordem, nome;")
     dimensoes = cur.fetchall()
-    cur.execute("SELECT id, dimensao_id, nome FROM cartao.dimensao_valor ORDER BY nome;")
+    cur.execute("SELECT id, dimensao_id, nome, icone FROM cartao.dimensao_valor ORDER BY nome;")
     valores_por_dim = {}
     for v in cur.fetchall():
         valores_por_dim.setdefault(v["dimensao_id"], []).append(v)

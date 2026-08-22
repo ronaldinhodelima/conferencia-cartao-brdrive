@@ -195,3 +195,24 @@ def test_recarregar_nunca_deixa_o_dicionario_vazio(monkeypatch):
     assert all("Parking" in v for v in vistos), "o nome sumiu durante a recarga"
     assert core.CATEGORIA_PT_DB == {"Parking": "Estacionamento"}
     assert "Sai" not in core.CATEGORIA_PT_DB, "o que saiu do banco tem que sair daqui"
+
+
+class TestRotuloValorDimensao:
+    """Icone opcional por valor de dimensao (ex: 🚙 Jeep, 🚗 Tracker).
+
+    Emoji e texto puro, entao cabe dentro de <option> - por isso basta prefixar,
+    diferente do selo do banco, que e HTML e precisa de campo separado.
+    """
+
+    def test_prefixa_o_icone_quando_existe(self):
+        assert core.rotulo_valor_dimensao({"nome": "Jeep", "icone": "🚙"}) == "🚙 Jeep"
+
+    def test_sem_icone_devolve_so_o_nome(self):
+        assert core.rotulo_valor_dimensao({"nome": "Ronaldo", "icone": None}) == "Ronaldo"
+
+    def test_icone_em_branco_nao_deixa_espaco_sobrando(self):
+        assert core.rotulo_valor_dimensao({"nome": "Andrea", "icone": "   "}) == "Andrea"
+
+    def test_valor_antigo_sem_a_coluna_nao_quebra(self):
+        # linha gravada antes da migracao v5 nao tem a chave 'icone'
+        assert core.rotulo_valor_dimensao({"nome": "Projeto X"}) == "Projeto X"

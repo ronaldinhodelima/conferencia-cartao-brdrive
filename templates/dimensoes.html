@@ -60,6 +60,10 @@
           <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="hidden" name="acao" value="editar_valor">
             <input type="hidden" name="valor_id" value="{{ v.id }}">
+            {# emoji opcional: aparece antes do nome na tabela, no filtro e no relatorio #}
+            <input name="icone" value="{{ v.icone or '' }}" placeholder="🚙" maxlength="4"
+                   title="Ícone opcional (emoji) para reconhecer este valor de relance"
+                   style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:52px;text-align:center">
             <input name="nome" value="{{ v.nome }}" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;width:200px">
             <span style="font-size:12px;color:#888">teto mensal</span>
             <input name="teto_mensal" value="{{ v.teto_mensal|num }}" placeholder="opcional"
