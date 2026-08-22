@@ -246,3 +246,18 @@ def test_menu_de_colunas_nao_depende_de_funcao_de_outra_tela():
     assert "cfToggle(" not in codigo, "tabelas.js nao pode chamar cfToggle"
     assert "function menuColunas" in tabelas
     assert "aplicarOcultas();" in tabelas, "a preferencia salva precisa valer no carregamento"
+
+
+def test_item_do_filtro_nao_herda_caixa_alta_do_rotulo():
+    """.chip-opt e um <label> dentro de .filters / .rel-filtros, que aplicam
+    text-transform: uppercase nos rotulos de campo ("MES", "STATUS").
+
+    Essa regra tem especificidade 0,1,1 - maior que ".chip-opt" sozinho (0,1,0) -
+    entao o nome da conta saia em CAIXA ALTA na lista de origens. O seletor
+    precisa ser "label.chip-opt" para empatar em peso e vencer por vir depois.
+    """
+    css = (RAIZ / "static" / "app.css").read_text(encoding="utf-8")
+    assert "label.chip-opt {" in css, "o seletor precisa do 'label.' para ter peso suficiente"
+    bloco = css[css.index("label.chip-opt {"):]
+    bloco = bloco[:bloco.index("}")]
+    assert "text-transform: none" in bloco

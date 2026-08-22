@@ -370,9 +370,9 @@ def origem_label_curto(tipo, connector_name, nome_conta, titular=None):
         base = "Dinheiro"
     else:
         base = nome_conta or "Outra"
-    # separador em vez de parenteses: o rotulo aparece em lista estreita (filtro de
-    # origem) e o parentese so ocupava espaco
-    return f"{base} · {titular}" if titular else base
+    # sem parentese e sem separador: o rotulo aparece em lista estreita (filtro de
+    # origem) e le melhor como uma frase so - "Conta Corrente Andrea"
+    return f"{base} {titular}" if titular else base
 
 
 def carregar_origens(cur):

@@ -296,11 +296,20 @@
   .chip-search-wrap { padding: 10px; border-bottom: 1px solid var(--line-soft); }
   .chip-search { width: 100%; padding: 8px 10px; border: none; background: var(--bg); border-radius: var(--radius-sm); font-size: 13px; outline: none; }
   .chip-list { max-height: 260px; overflow-y: auto; padding: 6px; }
-  .chip-opt { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--ink); }
-  .chip-opt:hover, .chip-opt.chip-hover { background: var(--bg); }
-  .chip-opt input { accent-color: var(--accent); width: 15px; height: 15px; }
+  /* Seletor com o "label." na frente de proposito: .chip-opt e um <label> dentro
+     de .filters / .rel-filtros, e a regra ".filters label { text-transform:
+     uppercase }" (pensada para o titulo do campo, "MES", "STATUS") tem
+     especificidade 0,1,1 - maior que ".chip-opt" sozinho, 0,1,0. Com
+     "label.chip-opt" o peso empata e vence quem vem depois no arquivo, que e
+     esta regra. Sem isso o nome da conta sai em CAIXA ALTA na lista. */
+  label.chip-opt { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; color: var(--ink); text-transform: none; letter-spacing: normal; }
+  label.chip-opt:hover, label.chip-opt.chip-hover { background: var(--bg); }
+  label.chip-opt input { accent-color: var(--accent); width: 15px; height: 15px; }
   /* quantos lancamentos a origem tem no mes aberto - discreto, so para comparar */
-  .chip-qtd { margin-left: auto; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  /* Continuacao da frase, nao coluna: sem margin-left:auto o numero fica junto do
+     nome em vez de alinhado na borda direita. O espaco ja vem do gap do flex,
+     entao margin fica em zero para nao afastar duas vezes. */
+  .chip-qtd { margin-left: 0; font-size: 11px; font-weight: 700; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
   .rel-grupo-detalhe { background: var(--bg); border-radius: var(--radius-sm); margin: 4px 0 10px 0; overflow: hidden; }
   .rel-mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
