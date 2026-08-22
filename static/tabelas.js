@@ -74,6 +74,7 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
     if (!mostrar) estado.ocultas.push(col);
     salvarEstado();
     aplicarOcultas();
+    atualizarDicasDeTruncamento(table);   // esconder coluna muda a largura das outras
   }
 
   function reordenarLinhas() {
@@ -250,6 +251,8 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
         estado.larguras[th.dataset.col] = th.getBoundingClientRect().width;
         estado.larguras[thVizinho.dataset.col] = thVizinho.getBoundingClientRect().width;
         salvarEstado();
+        // a coluna mudou de largura: o que cabia pode ter passado a nao caber
+        atualizarDicasDeTruncamento(table);
         // rede de seguranca: normalmente a trava e consumida pelo handler de click
         // do th (a alca se move junto com a coluna, entao o click pode cair fora dela)
         setTimeout(function () { redimensionandoAgora = false; }, 300);
@@ -349,6 +352,7 @@ function ativarTabelaAjustavel(table, chave, opcoes) {
 
   // por ultimo: a preferencia de coluna escondida vale desde o carregamento
   aplicarOcultas();
+  atualizarDicasDeTruncamento(table);
 }
 
 // ativa sozinho toda tabela marcada com class="ajustavel" e data-tabela="chave"
@@ -357,6 +361,63 @@ document.addEventListener('DOMContentLoaded', function () {
     ativarTabelaAjustavel(t, t.dataset.tabela);
   });
 });
+
+// ---- dica automatica no que ficou cortado ----
+// A descricao ja tinha data-tip vindo do servidor. Aqui a mesma coisa vale para
+// qualquer celula, campo ou seletor cujo conteudo nao caiba na largura atual -
+// inclusive depois de o usuario redimensionar ou esconder uma coluna.
+//
+// Só marca o que está REALMENTE cortado: dica em texto que ja aparece inteiro
+// vira ruido. Por isso mede, em vez de marcar tudo.
+let _reguaTexto = null;
+function larguraDoTexto(texto, estilo) {
+  if (!_reguaTexto) {
+    _reguaTexto = document.createElement('span');
+    _reguaTexto.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0';
+    document.body.appendChild(_reguaTexto);
+  }
+  _reguaTexto.style.font = estilo.font;
+  _reguaTexto.style.letterSpacing = estilo.letterSpacing;
+  _reguaTexto.textContent = texto;
+  return _reguaTexto.offsetWidth;
+}
+
+function marcarDica(el, texto) {
+  if (!texto) return;
+  el.setAttribute('data-tip', texto);
+  el.setAttribute('data-tip-auto', '1');   // marca as nossas, para poder tirar depois
+}
+function limparDicaAuto(el) {
+  if (el.getAttribute('data-tip-auto')) {
+    el.removeAttribute('data-tip');
+    el.removeAttribute('data-tip-auto');
+  }
+}
+
+function atualizarDicasDeTruncamento(table) {
+  table.querySelectorAll('tbody td[data-col]').forEach(function (td) {
+    // celula de texto puro: o proprio scrollWidth denuncia o corte
+    if (!td.querySelector('input, select')) {
+      // nao mexe em data-tip vindo do servidor (descricao, data, origem)
+      if (!td.getAttribute('data-tip') || td.getAttribute('data-tip-auto')) {
+        const cortado = td.scrollWidth > td.clientWidth + 1;
+        cortado ? marcarDica(td, td.textContent.trim()) : limparDicaAuto(td);
+      }
+      return;
+    }
+    td.querySelectorAll('input[type=text], select').forEach(function (campo) {
+      const estilo = window.getComputedStyle(campo);
+      const texto = campo.tagName === 'SELECT'
+        ? ((campo.options[campo.selectedIndex] || {}).textContent || '').trim()
+        : campo.value;
+      if (!texto) { limparDicaAuto(campo); return; }
+      const reservado = parseFloat(estilo.paddingLeft) + parseFloat(estilo.paddingRight) +
+        (campo.tagName === 'SELECT' ? 22 : 2);   // o seletor ainda gasta espaco com a seta
+      const cabe = larguraDoTexto(texto, estilo) <= campo.clientWidth - reservado;
+      cabe ? limparDicaAuto(campo) : marcarDica(campo, texto);
+    });
+  });
+}
 
 // ---- ESC fecha qualquer modal aberto (compartilhado por todas as telas) ----
 // Todas as telas usam a mesma marcacao .modal-bg + classe .show, entao um unico

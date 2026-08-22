@@ -351,3 +351,21 @@ def test_ocultar_coluna_vence_a_regra_defensiva_do_cabecalho():
     js = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
     assert "classList.toggle('coluna-oculta'" in js
     assert "th.style.display" not in js, "style inline perde para o !important do CSS"
+
+
+def test_dica_automatica_so_no_que_esta_cortado():
+    """Qualquer campo cujo conteudo nao caiba na largura atual ganha data-tip,
+    como a descricao ja tinha vindo do servidor.
+
+    Duas coisas que o codigo precisa garantir:
+    - marcar SO o que esta cortado de fato (dica em texto ja visivel e ruido),
+      por isso mede a largura do texto em vez de marcar tudo;
+    - nao pisar no data-tip que vem do servidor - as dicas automaticas levam
+      data-tip-auto para poderem ser retiradas quando a coluna alargar.
+    """
+    js = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
+    assert "function atualizarDicasDeTruncamento" in js
+    assert "data-tip-auto" in js, "precisa distinguir a dica automatica da do servidor"
+    assert "function larguraDoTexto" in js, "precisa medir, nao marcar tudo"
+    # roda ao ativar, ao esconder coluna e ao redimensionar
+    assert js.count("atualizarDicasDeTruncamento(table)") >= 3
