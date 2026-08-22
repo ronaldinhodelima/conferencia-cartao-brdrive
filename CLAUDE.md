@@ -271,16 +271,14 @@ Aí o Jinja não protege — quem escapa é o `escHtml()` do `tabelas.js`, no po
 sem `esc()`) **e o JS escapa**. Não escapar no servidor também: gera escape duplo, e em
 rótulo de gráfico (Chart.js desenha em canvas) apareceria `&amp;` literal na tela.
 
-**Servidor de desenvolvimento em produção:** o `Dockerfile` sobe com `python app.py`, ou
-seja, o servidor embutido do Flask — ele mesmo avisa no log ("This is a development server").
-Aguenta o uso da família, mas atende uma requisição por vez e não foi feito para exposição
-pública. Trocar por `gunicorn` é uma linha no `Dockerfile` (`CMD ["gunicorn","-b","0.0.0.0:8000","app:app"]`)
-mais `gunicorn` no `pip install`. **Não foi feito** para não misturar mudança de runtime com a
-refatoração; é a próxima coisa que eu faria.
-
-**Chart.js vem de CDN** (`cdnjs.cloudflare.com`, em `templates/relatorios.html`). É a única
-dependência externa em runtime: se o CDN cair ou for bloqueado, o gráfico de `/relatorios`
-some (o resto da tela continua). Baixar o arquivo para `static/` resolveria.
+**Gunicorn com `--preload` (não remova o preload):** o app roda em
+`gunicorn --preload -w 2 --timeout 120`. O `--preload` não é detalhe de performance —
+`core.py` chama `migrate()` no import, então sem ele **cada worker roda a migração ao mesmo
+tempo no boot** e as DDL competem entre si (medido: 3 workers = 3 imports; com preload = 1).
+É seguro porque nenhuma conexão de banco fica aberta em variável de módulo. Se algum dia
+alguém criar um pool global, o preload passa a compartilhar socket entre os processos filhos
+e vira bug. O `--timeout 120` existe porque "Atualizar agora" chama o worker de sync com
+timeout de 60s — o padrão do gunicorn (30s) mataria o processo antes.
 
 **Sem ambiente de staging:** todo push na `main` vai direto para o app que a família usa.
 Mitigado hoje pelos testes e pela validação pós-deploy, mas o risco existe.

@@ -11,6 +11,19 @@ COPY static/ /app/static/
 # templates/ tem as telas em Jinja. Sem esta linha, toda rota que usa
 # render_template() estoura TemplateNotFound (500).
 COPY templates/ /app/templates/
-RUN pip install --no-cache-dir flask psycopg2-binary
+RUN pip install --no-cache-dir flask psycopg2-binary gunicorn
 EXPOSE 8000
-CMD ["python", "app.py"]
+# gunicorn no lugar do servidor embutido do Flask, que atende uma requisicao por
+# vez e avisa no proprio log que nao e para producao.
+#
+# --preload importa o app UMA vez no processo mestre e so depois faz o fork. Isso
+# importa aqui porque core.py roda migrate() no import: sem preload, cada worker
+# rodaria a migracao ao mesmo tempo no boot e as DDL competiriam entre si.
+# E seguro porque nenhuma conexao de banco fica aberta em variavel de modulo -
+# migrate() abre e fecha a dele, e get_conn() cria uma por requisicao. Se algum
+# dia surgir um pool global, o preload passa a compartilhar socket entre os
+# processos filhos e vira bug.
+#
+# --timeout 120 porque o botao "Atualizar agora" chama o worker de sync com
+# urllib usando timeout de 60s; o padrao do gunicorn (30s) mataria o worker antes.
+CMD ["gunicorn", "--preload", "-w", "2", "--timeout", "120", "-b", "0.0.0.0:8000", "app:app"]
