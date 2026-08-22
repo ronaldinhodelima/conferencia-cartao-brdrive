@@ -44,9 +44,14 @@ Na prática:
   **O escaping do Jinja é automático**: nada de `esc()` dentro de valor que vai para template
   (gera `&quot;` visível na tela). Quando o valor já é HTML confiável montado no Python
   (selo do banco, topbar, aviso de pendências), marque `|safe` explicitamente — assim fica
-  claro na revisão que foi decisão, não esquecimento. Para valor que entra em **string
-  JavaScript** (dentro de `onclick`/`onsubmit`), `|safe` e escape de HTML não bastam: use
-  `|tojson`.
+  claro na revisão que foi decisão, não esquecimento.
+  **Nunca interpole dado dentro de `onclick`/`onchange`/`onsubmit`.** `|tojson` é o escape
+  certo dentro de `<script>`, e errado dentro de atributo: o filtro do Flask não escapa aspas
+  duplas, então `onclick="f({{ id|tojson }})"` vira `onclick="f("abc")"` — o atributo fecha
+  cedo, o handler não compila e **falha em silêncio**. Foi assim que a tela de Lançamentos
+  parou de abrir detalhes e de salvar, e que o "Excluir" de `/usuarios` passou a apagar sem
+  pedir confirmação. Para levar dado ao JS: `data-attribute` + delegação de evento, ou um
+  bloco `<script type="application/json">`. `tests/test_estrutura.py` trava os dois casos.
 - **Banco**: PostgreSQL, schema `cartao.*` (rodando dentro do Coolify, host interno de rede
   Docker — não acessível de fora).
 - **Worker de sincronização**: `bussola/app.py` (serviço separado no Coolify) — busca dados do
