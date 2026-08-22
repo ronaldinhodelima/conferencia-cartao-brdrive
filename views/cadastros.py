@@ -733,6 +733,12 @@ def categorias_view():
                     cur.execute("INSERT INTO cartao.categoria_oculta (categoria) VALUES (%s) ON CONFLICT DO NOTHING;", (categoria,))
                     conn.commit()
                     aviso = f'Categoria "{cat_pt_puro(categoria)}" removida.'
+        except psycopg2.errors.UniqueViolation:
+            # rede de baixo: a validacao da tela ja barra nome repetido, mas se
+            # algo passar, o indice do banco impede - e o usuario merece uma
+            # mensagem em portugues, nao o erro cru do Postgres
+            conn.rollback()
+            erro = "Já existe uma categoria com esse nome."
         except Exception as e:
             conn.rollback()
             erro = str(e)

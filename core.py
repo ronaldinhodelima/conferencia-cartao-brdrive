@@ -856,6 +856,33 @@ def migrate():
             cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (3);")
             conn.commit()
 
+        if versao_atual < 4:
+            # Nome de categoria unico tambem no banco, nao so na validacao da tela.
+            #
+            # ALCANCE: a tabela cartao.categoria guarda apenas os APELIDOS - so tem
+            # linha para categoria que foi renomeada. Entao este indice impede duas
+            # renomeacoes para o mesmo nome, mas nao impede renomear para o nome
+            # padrao de uma categoria que nunca foi renomeada. A checagem completa
+            # e a de categoria_com_nome(), na aplicacao; isto aqui e a rede de baixo.
+            #
+            # lower() para "Mercado" e "mercado" colidirem. Acento nao entra: exigiria
+            # a extensao unaccent, que pode nao estar instalada no Postgres do Coolify.
+            #
+            # Passo com try proprio: se sobrar nome repetido na base, o indice falha e
+            # so este passo e desfeito - o app sobe, avisa no log e tenta de novo no
+            # boot seguinte, depois que a base for limpa.
+            try:
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS categoria_nome_pt_unico "
+                    "ON cartao.categoria (lower(nome_pt));"
+                )
+                cur.execute("INSERT INTO cartao.schema_version (versao) VALUES (4);")
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print("Aviso: indice unico de nome de categoria nao aplicado "
+                      "(ha nomes repetidos na base?):", e)
+
         cur.close()
         conn.close()
     except Exception as e:

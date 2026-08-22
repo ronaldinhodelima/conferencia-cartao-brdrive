@@ -210,3 +210,26 @@ def test_filtro_de_tabela_existe_e_e_automatico():
     # <select> cujas opcoes listam todas as categorias, e aí qualquer busca
     # casaria com todas as linhas
     assert "clone.querySelectorAll('select').forEach" in js
+
+
+def test_migracoes_sao_sequenciais_e_registradas_uma_vez():
+    """Cada bloco 'if versao_atual < N' precisa ter o seu 'INSERT ... VALUES (N)'.
+
+    Sem isso a migracao ou nunca e registrada (roda de novo a cada boot) ou pula
+    um numero e a proxima nunca roda. Migracao ja aplicada em producao nao pode
+    ser reescrita: criaria divergencia de schema entre bancos.
+    """
+    import re
+
+    texto = (RAIZ / "core.py").read_text(encoding="utf-8")
+    versoes_bloco = [int(v) for v in re.findall(r"if versao_atual < (\d+):", texto)]
+    versoes_gravadas = [
+        int(v) for v in re.findall(r"INSERT INTO cartao\.schema_version \(versao\) VALUES \((\d+)\)", texto)
+    ]
+
+    assert versoes_bloco == sorted(versoes_bloco), "blocos fora de ordem"
+    assert versoes_bloco == list(range(1, len(versoes_bloco) + 1)), f"numeracao com buraco: {versoes_bloco}"
+    assert sorted(versoes_gravadas) == versoes_bloco, (
+        f"blocos {versoes_bloco} mas gravam {sorted(versoes_gravadas)}"
+    )
+    assert len(versoes_gravadas) == len(set(versoes_gravadas)), "versao gravada mais de uma vez"
