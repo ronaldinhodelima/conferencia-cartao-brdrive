@@ -121,24 +121,17 @@
     <span class="close" onclick="fecharModalTx()">&times;</span>
     <h3>Detalhes do lançamento</h3>
     <div id="modalTxBody"></div>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-      <div style="font-size:13px;margin-bottom:6px">Categoria</div>
-      <select id="modalTxCategoria" onchange="salvarCategoriaTx()"
-              {{ 'disabled' if not pode_editar }} style="width:100%;padding:7px 9px">
+    {# mesma linha dos demais campos, como em Lançamentos #}
+    <div class="row">
+      <span>Categoria</span>
+      <span><select id="modalTxCategoria" onchange="salvarCategoriaTx()"
+                    {{ 'disabled' if not pode_editar }} style="padding:5px 7px;max-width:230px">
         {% for c in categorias %}<option value="{{ c.chave }}">{{ c.nome }}</option>{% endfor %}
-      </select>
-      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-        Mover o lançamento para outra categoria muda também a natureza contábil
-        que ele assume no DRE.
-      </div>
-      <div id="modalTxStatus" style="font-size:12px;margin-top:6px"></div>
+      </select></span>
     </div>
+    <div id="modalTxStatus" style="font-size:12px;margin-top:8px"></div>
   </div>
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script src="/static/categorias.js"></script>
-{# salvar aqui recarrega a tela inteira; sem isto o navegador volta ao topo #}
-<script>manterPosicaoAoSalvar();</script>
-{% endblock %}
+{% block scripts %}<script src="/static/categorias.js"></script>{% endblock %}

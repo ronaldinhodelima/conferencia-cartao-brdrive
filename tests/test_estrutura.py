@@ -138,13 +138,38 @@ def test_nenhum_handler_inline_recebe_id_interpolado():
     assert not suspeitos, f"handler inline com o id da linha: {suspeitos}"
 
 
-def test_telas_de_cadastro_mantem_a_posicao_ao_salvar():
-    """Centro de Custos e Categorias reenviam o form e o servidor devolve a pagina
-    inteira, entao o navegador voltaria ao topo a cada alteracao. As duas telas
-    precisam chamar manterPosicaoAoSalvar(), definido em tabelas.js."""
-    for nome in ("grupos.html", "categorias.html"):
-        html = (RAIZ / "templates" / nome).read_text(encoding="utf-8")
-        assert "manterPosicaoAoSalvar()" in html, f"{nome} nao mantem a posicao ao salvar"
+def test_posicao_da_pagina_e_mantida_em_todas_as_telas():
+    """Salvar reenvia o form e a view devolve a pagina inteira, entao o navegador
+    voltaria ao topo a cada alteracao.
 
+    A ativacao e automatica no tabelas.js (carregado por todas as telas via
+    base.html) em vez de uma chamada por template - assim tela nova ja nasce com
+    o comportamento certo, sem depender de alguem lembrar.
+    """
     tabelas = (RAIZ / "static" / "tabelas.js").read_text(encoding="utf-8")
     assert "function manterPosicaoAoSalvar" in tabelas
+    assert "addEventListener('DOMContentLoaded', manterPosicaoAoSalvar)" in tabelas
+    assert '<script src="/static/tabelas.js">' in (RAIZ / "templates" / "base.html").read_text(encoding="utf-8")
+
+
+def test_todo_reload_por_js_guarda_a_posicao_antes():
+    """window.location.reload() nao dispara submit, entao a posicao nao seria
+    guardada sozinha - cada reload por codigo precisa chamar guardarPosicaoAtual()
+    antes."""
+    import re
+
+    problemas = []
+    for caminho in sorted((RAIZ / "static").glob("*.js")):
+        if caminho.name == "chart.umd.min.js":
+            continue
+        # comentario que apenas menciona reload nao conta
+        texto = "\n".join(
+            "" if l.lstrip().startswith("//") else l
+            for l in caminho.read_text(encoding="utf-8").splitlines()
+        )
+        for m in re.finditer(r"location\.reload\(\)", texto):
+            antes = texto[max(0, m.start() - 220):m.start()]
+            if "guardarPosicaoAtual()" not in antes:
+                linha = texto[:m.start()].count("\n") + 1
+                problemas.append(f"{caminho.name}:{linha}")
+    assert not problemas, f"reload sem guardar a posicao antes: {problemas}"

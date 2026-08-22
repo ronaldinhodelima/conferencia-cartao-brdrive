@@ -3,7 +3,7 @@
 {% block conteudo %}
 <div class="filters" style="flex-wrap:wrap;gap:14px">
   <div>
-    <label>Mes</label>
+    {# sem rotulo: o campo de mes e os botoes ‹ › ja dizem o que e #}
     <div style="display:flex;align-items:center;gap:4px">
       <button type="button" onclick="mudarMes(-1)" title="Mês anterior"
               style="padding:6px 12px;font-size:15px;line-height:1">‹</button>
@@ -114,37 +114,22 @@
     <span class="close" onclick="fecharModal()">&times;</span>
     <h3>Detalhes do lançamento</h3>
     <div id="modalBody"></div>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-      <div style="font-size:13px;margin-bottom:6px">Categoria</div>
-      <select id="modalCategoria" onchange="salvarCategoriaModal()" {{ 'disabled' if not pode_editar }} style="width:100%;padding:7px 9px">
+    {# Categoria fica na mesma linha dos demais campos, como um campo a mais da
+       lista - o modal ja e longo. A natureza por lancamento saiu daqui: o caminho
+       normal e definir a natureza na categoria, em /categorias. #}
+    <div class="row">
+      <span>Categoria</span>
+      <span><select id="modalCategoria" onchange="salvarCategoriaModal()"
+                    {{ 'disabled' if not pode_editar }} style="padding:5px 7px;max-width:230px">
         {% for c in categorias %}<option value="{{ c.chave }}">{{ c.nome }}</option>{% endfor %}
-      </select>
-      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-        A categoria carrega a natureza contábil — mover o lançamento para a categoria
-        certa é o caminho preferido em vez de definir a natureza abaixo.
-      </div>
+      </select></span>
     </div>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-      <div style="font-size:13px;margin-bottom:6px">Natureza deste lançamento</div>
-      <select id="modalNatureza" onchange="salvarNaturezaModal()" style="width:100%;padding:7px 9px">
-        <option value="">Seguir a categoria</option>
-        {% for chave, rotulo in naturezas.items() %}
-          {% if chave != 'fluxo' %}<option value="{{ chave }}">{{ rotulo }}</option>{% endif %}
-        {% endfor %}
-      </select>
-      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-        Use quando o lançamento foge do padrão da categoria — por exemplo um PIX que foi
-        a compra de um terreno ou veículo: não é despesa, é aquisição de bem.
-      </div>
-    </div>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)">
-      <label style="display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer">
-        <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()" style="width:15px;height:15px;accent-color:var(--accent)">
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:9px;cursor:pointer;color:var(--ink)">
+        <input type="checkbox" id="modalDup" onchange="toggleDuplicadaModal()"
+               style="width:15px;height:15px;accent-color:var(--accent)">
         Marcar como duplicada
       </label>
-      <div style="font-size:11.5px;color:var(--ink-faint);margin-top:5px">
-        Lançamentos duplicados ficam riscados e não entram nos totais.
-      </div>
     </div>
     <div id="modalAcoes" style="margin-top:14px;display:none">
       <button type="button" class="btn-perigo" onclick="excluirManual()" {{ 'disabled' if not pode_manual }}>Excluir lançamento</button>

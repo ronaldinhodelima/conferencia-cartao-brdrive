@@ -15,6 +15,7 @@ function escHtml(s) {
 // (linhas com colspan), onde ordenar ou trocar colunas de lugar nao faz sentido.
 function redefinirColunas(chave) {
   localStorage.removeItem('pedemeia_tabela_' + chave);
+  guardarPosicaoAtual();
   window.location.reload();
 }
 
@@ -248,36 +249,49 @@ document.addEventListener('keydown', function (e) {
 });
 
 // ---- manter a posicao da pagina ao salvar ----
-// As telas de cadastro (Centro de Custos, Categorias) reenviam o formulario e o
-// servidor devolve a pagina inteira. O navegador entao abre o documento novo no
-// topo, e quem estava editando um item la embaixo perde o lugar.
+// Quase toda tela de cadastro reenvia o formulario e a view devolve a pagina
+// inteira (nao ha redirect). Para o navegador e um documento novo, e documento
+// novo abre no topo - quem estava editando um item la embaixo perde o lugar a
+// cada alteracao.
 //
-// Guardamos a posicao no sessionStorage antes do envio e voltamos para ela
-// quando a pagina nova chega. Chame no fim do <body>, com o DOM ja montado.
-function manterPosicaoAoSalvar() {
-  const CHAVE = 'pedemeia_pos_' + location.pathname;
-  const VALIDADE_MS = 15000;
+// Guardamos a posicao no sessionStorage e voltamos para ela quando a pagina nova
+// chega. Ativa sozinho em todas as telas (ver o final do arquivo), entao tela
+// nova ja nasce com o comportamento certo.
+const POS_CHAVE = 'pedemeia_pos_' + location.pathname;
+const POS_VALIDADE_MS = 15000;
 
-  document.addEventListener('submit', function () {
-    sessionStorage.setItem(CHAVE, JSON.stringify({
+// Chame antes de um window.location.reload() feito por JS: recarregar por codigo
+// nao dispara o evento submit, entao a posicao nao seria guardada sozinha.
+function guardarPosicaoAtual() {
+  try {
+    sessionStorage.setItem(POS_CHAVE, JSON.stringify({
       y: window.scrollY,
-      // o <details> de ajuda fica no topo: se voltasse fechado, tudo abaixo
-      // subiria e a rolagem cairia no lugar errado
+      // o <details> de ajuda fica no topo de varias telas: se voltasse fechado,
+      // tudo abaixo subiria e a rolagem cairia no lugar errado
       abertos: Array.from(document.querySelectorAll('details')).map(function (d) { return d.open; }),
       em: Date.now(),
     }));
-  });
+  } catch (e) { /* sessionStorage indisponivel: so perde a posicao */ }
+}
+
+function manterPosicaoAoSalvar() {
+  document.addEventListener('submit', guardarPosicaoAtual);
 
   let estado = null;
-  try { estado = JSON.parse(sessionStorage.getItem(CHAVE) || 'null'); } catch (e) { estado = null; }
-  sessionStorage.removeItem(CHAVE);
+  try {
+    estado = JSON.parse(sessionStorage.getItem(POS_CHAVE) || 'null');
+    sessionStorage.removeItem(POS_CHAVE);
+  } catch (e) { return; }
   if (!estado) return;
   // envio cancelado (confirm recusado) deixa a posicao guardada sem navegacao
   // nenhuma - sem esta checagem, a proxima visita a tela daria um pulo sozinho
-  if (Date.now() - (estado.em || 0) > VALIDADE_MS) return;
+  if (Date.now() - (estado.em || 0) > POS_VALIDADE_MS) return;
 
   document.querySelectorAll('details').forEach(function (d, i) {
     if ((estado.abertos || [])[i]) d.open = true;
   });
-  window.scrollTo(0, estado.y || 0);
+  // espera o layout assentar (larguras de coluna sao aplicadas por JS) antes de rolar
+  requestAnimationFrame(function () { window.scrollTo(0, estado.y || 0); });
 }
+
+document.addEventListener('DOMContentLoaded', manterPosicaoAoSalvar);

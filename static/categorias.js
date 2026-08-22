@@ -99,6 +99,7 @@ function salvarCategoriaTx() {
       status.style.color = 'var(--good)';
       status.textContent = 'Categoria alterada. Recarregando a tela…';
       // a contagem por categoria muda, entao a tela precisa ser refeita
+      guardarPosicaoAtual();
       setTimeout(() => window.location.reload(), 800);
     })
     .catch(() => { status.style.color = 'var(--bad)'; status.textContent = 'Falha ao salvar.'; });

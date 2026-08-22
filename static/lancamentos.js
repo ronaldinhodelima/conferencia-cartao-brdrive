@@ -162,8 +162,9 @@ function verDetalhes(id) {
   const d = window.detalhes[id];
   if (!d) return;
   idAtualModal = id;
+  // 'categoria' fora da lista: virou o seletor em linha, logo abaixo do corpo
   const labels = {
-    data: 'Data', descricao: 'Descrição', categoria: 'Categoria', valor: 'Valor (R$)',
+    data: 'Data', descricao: 'Descrição', valor: 'Valor (R$)',
     valor_original: 'Valor original', status: 'Status', tipo: 'Tipo', origem: 'Origem',
     parcela: 'Parcela', conferida: 'Conferida', conferida_por: 'Conferida por', observacao: 'Observação'
   };
@@ -182,9 +183,6 @@ function verDetalhes(id) {
   const trAtual = document.querySelector('tr[data-id="' + id + '"]');
   const dupAtual = trAtual ? trAtual.querySelector('.dup-check') : null;
   document.getElementById('modalDup').checked = dupAtual ? dupAtual.checked : false;
-  const selNat = document.getElementById('modalNatureza');
-  selNat.options[0].textContent = 'Seguir a categoria (' + (d._natureza_efetiva || 'Despesa') + ')';
-  selNat.value = d._natureza || '';
   // espelha a categoria da linha; mudar aqui muda la e salva
   const selCat = document.getElementById('modalCategoria');
   const catLinha = trAtual ? trAtual.querySelector('.cat-select') : null;
@@ -200,16 +198,7 @@ function salvarCategoriaModal() {
   selLinha.value = document.getElementById('modalCategoria').value;
   salvar(idAtualModal, selLinha);
   // a categoria carrega a natureza contabil, entao os totais do mes mudam
-  setTimeout(() => window.location.reload(), 600);
-}
-function salvarNaturezaModal() {
-  if (!idAtualModal) return;
-  const nat = document.getElementById('modalNatureza').value;
-  const tr = document.querySelector('tr[data-id="' + idAtualModal + '"]');
-  if (!tr) return;
-  if (window.detalhes[idAtualModal]) window.detalhes[idAtualModal]._natureza = nat;
-  salvar(idAtualModal, tr.querySelector('.cat-select'));
-  // a natureza muda os totais do mes, entao recarrega os numeros
+  guardarPosicaoAtual();
   setTimeout(() => window.location.reload(), 600);
 }
 function toggleDuplicadaModal() {
@@ -239,7 +228,7 @@ function excluirManual() {
   fetch('/api/lancamento-manual/' + idAtualModal, { method: 'DELETE' })
     .then(r => r.json())
     .then(res => {
-      if (res.ok) { fecharModal(); window.location.reload(); }
+      if (res.ok) { fecharModal(); guardarPosicaoAtual(); window.location.reload(); }
       else alert(res.erro || 'Não foi possível excluir.');
     });
 }
@@ -340,7 +329,7 @@ function salvarManual(e) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)
   }).then(r => r.json()).then(d => {
-    if (d.ok) { window.location.reload(); }
+    if (d.ok) { guardarPosicaoAtual(); window.location.reload(); }
     else { statusEl.textContent = d.erro || 'Falha ao salvar'; }
   }).catch(() => { statusEl.textContent = 'Falha ao salvar'; });
   return false;
